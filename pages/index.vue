@@ -1,302 +1,358 @@
 <template>
-  <main class="container">
-    <!-- Header -->
-    <header class="header">
-      <div>
-        <h1>Crew Console · Equipment</h1>
-        <p class="subtitle">Search and browse equipment via your server-side proxy</p>
-      </div>
-      <span v-if="meta" class="pill">
-        Page {{ meta.current_page ?? 1 }} / {{ meta.last_page ?? 1 }}
-      </span>
-    </header>
+  <main class="page">
+    <section class="board">
+      <!-- Header row -->
+      <header class="board-head">
+        <div></div>
+        <div class="col-title">Download Template</div>
+        <div class="col-title">Upload .csv file</div>
+      </header>
 
-    <!-- Controls -->
-    <form class="panel controls" @submit.prevent="run">
-      <label class="field">
-        <span>Query</span>
-        <input v-model="query" placeholder="Search term (optional)" />
-      </label>
+      <!-- Rows -->
+      <article v-for="item in rows" :key="item.key" class="row">
+        <!-- Label + tooltip -->
+        <h3 class="label">
+          <span class="tooltip-wrap" tabindex="0">
+            {{ item.name }}
+            <span class="tooltip-bubble" role="tooltip">
+              <template v-for="(line, i) in item.desc" :key="i">
+                <span>{{ line }}</span><br/>
+              </template>
+              <a href="#" target="_blank" rel="noreferrer">Watch here on how to fill out the .csv file.</a>
+            </span>
+          </span>
+        </h3>
 
-      <label class="field sm">
-        <span>Page</span>
-        <input v-model.number="page" type="number" min="1" />
-      </label>
+        <!-- Download template (immediate download via blob) -->
+        <button
+          class="icon-btn"
+          :class="{ disabled: !item.template }"
+          aria-label="Download CSV template"
+          @click="item.template && downloadTemplate(item)"
+        >
+          <svg viewBox="0 0 64 64" width="40" height="40" aria-hidden="true">
+            <rect x="10" y="12" width="36" height="44" rx="4" fill="#E7EEF7" stroke="#9CB3D2" stroke-width="2"/>
+            <path d="M38 12v12h12" fill="#E7EEF7" stroke="#9CB3D2" stroke-width="2"/>
+            <rect x="16" y="42" width="28" height="14" rx="6" :fill="item.template ? '#22C55E' : '#A3A3A3'"/>
+            <text x="30" y="52" text-anchor="middle" font-size="11" fill="white" font-weight="700"
+                  font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial">CSV</text>
+          </svg>
+        </button>
 
-      <label class="field sm">
-        <span>Per page</span>
-        <input v-model.number="perPage" type="number" min="1" />
-      </label>
+        <!-- Upload icon -->
+        <button
+          class="icon-btn upload"
+          :aria-label="`Upload CSV for ${item.name}`"
+          @click="handleUploadClick(item.key)"
+          :disabled="(item.key === 'employees' && uploadingEmp) || (item.key === 'equipment' && uploadingEquip)"
+        >
+          <svg viewBox="0 0 64 64" width="48" height="48" aria-hidden="true">
+            <path d="M22 30l10-12 10 12" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M32 18v26" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+            <path d="M14 44v6a6 6 0 006 6h24a6 6 0 006-6v-6" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </article>
 
-      <div class="actions">
-        <button class="btn primary" :disabled="pending">Search</button>
-        <button class="btn ghost" type="button" @click="reset" :disabled="pending">Reset</button>
-
-        <div class="spacer" />
-
-        <label class="switch">
-          <input type="checkbox" v-model="asCards" />
-          <span>Cards view</span>
-        </label>
-      </div>
-    </form>
-
-    <!-- Status -->
-    <div class="status">
-      <span v-if="pending" class="muted">Loading…</span>
-      <span v-else-if="error" class="error">Error: {{ error }}</span>
-      <span v-else class="muted">
-        <strong>{{ items.length }}</strong> item(s)
-        <span v-if="meta?.total"> • total {{ meta.total }}</span>
-      </span>
-    </div>
-
-    <!-- Results -->
-    <section v-if="!error" class="results">
-      <!-- Cards -->
-      <div v-if="asCards" class="card-grid" v-show="items.length">
-        <article class="card" v-for="(it, i) in items" :key="i">
-          <h3 class="card-title">
-            {{ it.name ?? it.title ?? it.code ?? it.id ?? `Item #${i+1}` }}
-          </h3>
-          <dl class="kv">
-            <template v-for="k in columns" :key="k">
-              <dt>{{ k }}</dt>
-              <dd>{{ formatValue(it[k]) }}</dd>
-            </template>
-          </dl>
-        </article>
-      </div>
-
-      <!-- Table -->
-      <div v-else>
-        <div v-if="items.length" class="panel table-wrap">
-          <table class="table">
-            <thead>
-              <tr>
-                <th v-for="c in columns" :key="c">{{ c }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, r) in items" :key="r">
-                <td v-for="c in columns" :key="c">{{ formatValue(row[c]) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p v-else class="muted pad">No equipment found (try a different query).</p>
+      <!-- Optional summaries -->
+      <div style="margin:8px 6px 0; color:#475569; font-size:14px;">
+        <p v-if="empSummary">Employees & Foreman — {{ empSummary }}</p>
+        <p v-if="equipSummary">Equipment — {{ equipSummary }}</p>
       </div>
     </section>
 
-    <!-- Pagination -->
-    <nav v-if="meta?.current_page && meta?.last_page" class="pager">
-      <button class="btn" :disabled="pending || meta.current_page <= 1" @click="go(meta.current_page - 1)">
-        ← Prev
-      </button>
-      <button class="btn" :disabled="pending || meta.current_page >= meta.last_page" @click="go(meta.current_page + 1)">
-        Next →
-      </button>
-    </nav>
-
-    <!-- Raw -->
-    <details class="panel raw">
-      <summary>Raw response</summary>
-      <pre>{{ prettyJson }}</pre>
-    </details>
+    <!-- Hidden file inputs (outside v-for) -->
+    <input
+      ref="empInput"
+      type="file"
+      class="sr-only"
+      accept=".csv,text/csv"
+      @change="onEmpPicked"
+    />
+    <input
+      ref="equipInput"
+      type="file"
+      class="sr-only"
+      accept=".csv,text/csv"
+      @change="onEquipPicked"
+    />
   </main>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
+import Papa from 'papaparse'
 
-const query   = ref('')
-const page    = ref(1)
-const perPage = ref(10)
-const asCards = ref(true)
-
-const pending = ref(false)
-const error   = ref<string | null>(null)
-const resp    = ref<any>(null)
-
-const items = computed<any[]>(() => resp.value?.data ?? [])
-const meta  = computed<any>(() => resp.value?.meta ?? null)
-const prettyJson = computed(() => JSON.stringify(resp.value ?? {}, null, 2))
-
-const columns = computed(() => {
-  const set = new Set<string>()
-  for (const it of items.value) {
-    if (it && typeof it === 'object') Object.keys(it).forEach(k => set.add(k))
-  }
-  const all = Array.from(set)
-  const priority = ['id','name','code','status','type','serial','serialNumber','category']
-  all.sort((a,b) => {
-    const ia = priority.indexOf(a); const ib = priority.indexOf(b)
-    if (ia !== -1 || ib !== -1) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
-    return a.localeCompare(b)
-  })
-  return all
-})
-
-function formatValue(v: any) {
-  if (v == null) return ''
-  if (typeof v === 'object') return JSON.stringify(v)
-  return String(v)
+type Row = {
+  key: 'employees'|'staff'|'equipment'|'jobs'|'tasks'|'customers'
+  name: string
+  desc: string[]
+  template?: string           // path under /public (e.g., /templates/Jobs.csv)
+  downloadName?: string       // suggested filename
 }
 
-async function run () {
-  pending.value = true
-  error.value = null
+const rows: Row[] = [
+  {
+    key: 'employees',
+    name: 'Employees and Foreman',
+    desc: [
+      'Employees and Foreman are people that can be',
+      'scheduled to job events and can keep time. They will',
+      'access the app with the pin number you assign them.',
+      'Foreman can also approve time and put in time for other',
+      'people.'
+    ],
+    template: '/templates/Employee_Foreman.csv',
+    downloadName: 'employees_and_foreman_template.csv'
+  },
+  {
+    key: 'staff',
+    name: 'Staff',
+    desc: [
+      'Staff, are people who you want to give additional feature',
+      'access to. You can assign features to each staff member',
+      'individually such as, the ability to edit the schedule, view',
+      'the schedule, access payroll, etc. Staff can also be',
+      'scheduled like Employees and foreman, set up to',
+      'approve time, and enter time for other people. Staff',
+      'members will log into the app with the email and',
+      'password you set up for them.'
+    ],
+    template: '/templates/Staff.csv',
+    downloadName: 'staff_template.csv'
+  },
+  {
+    key: 'equipment',
+    name: 'Equipment',
+    desc: [
+      'Equipment, is any piece of machinery you want to',
+      'schedule along with your Employees, Foreman, and staff.',
+      'Equipment can also be added to crews.'
+    ],
+    template: '/templates/Equipment.csv',
+    downloadName: 'equipment_template.csv'
+  },
+  {
+    key: 'jobs',
+    name: 'Jobs',
+    desc: [
+      'Jobs are the locations you will be working at. You can put',
+      'them on the schedule, photos, videos, docs, and notes can be',
+      'stored in them, tasks can be assigned to them, goals created',
+      '(man hour and material), and people can assign time to them.'
+    ],
+    template: '/templates/Jobs.csv',
+    downloadName: 'jobs_template.csv'
+  },
+  {
+    key: 'tasks',
+    name: 'Tasks',
+    desc: [
+      'Tasks can be assigned to jobs. They can be scheduled to job',
+      'events, people can put their time to them, and photos, vids,',
+      'docs, and notes can be assigned to them under a job.'
+    ],
+    template: '/templates/Tasks.csv',
+    downloadName: 'tasks_template.csv'
+  },
+  {
+    key: 'customers',
+    name: 'Customers',
+    desc: [
+      'Customers can be assigned to jobs. You can filter the schedule',
+      'by customer name, view all hours entered on jobs by customer,',
+      'and even send event texts to customers from the schedule.'
+    ],
+    template: '/templates/Customers.csv',
+    downloadName: 'customers_template.csv'
+  }
+]
+
+/** --------- Download templates (from /public) as a real download ---------- */
+async function downloadTemplate(item: Row) {
+  if (!item.template) return
   try {
-    resp.value = await $fetch('/api/crew/equipment', {
-      method: 'POST',
-      query: { page: page.value, per_page: perPage.value },
-      body:  { query: query.value }
-    })
-  } catch (e: any) {
-    error.value = e?.statusMessage || e?.message || 'Request failed'
-    resp.value = null
-  } finally {
-    pending.value = false
+    const res = await fetch(item.template, { cache: 'no-store' })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = item.downloadName || item.template.split('/').pop() || 'template.csv'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error('Download failed:', e)
+    alert('Sorry—download failed. Please try again.')
   }
 }
 
-function reset() {
-  query.value = ''
-  page.value = 1
-  perPage.value = 10
-  run()
+/** --------- Employees & Foreman upload ---------- */
+const empInput = ref<HTMLInputElement | null>(null)
+const uploadingEmp = ref(false)
+const empSummary = ref('')
+
+/** --------- Equipment upload ---------- */
+const equipInput = ref<HTMLInputElement | null>(null)
+const uploadingEquip = ref(false)
+const equipSummary = ref('')
+
+/**
+ * Parse CSV where:
+ *   Row 1  -> instructions (ignore)
+ *   Row 2  -> column headers
+ *   Row 3+ -> data rows
+ * Returns array of objects keyed by the headers in row 2.
+ */
+function readCsvFile(file: File): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    Papa.parse(file, {
+      header: false,          // we'll construct objects manually
+      skipEmptyLines: true,
+      complete: (res) => {
+        const rows = (res.data as unknown as any[][]) || []
+        if (rows.length < 2) { resolve([]); return }
+
+        // Row 2 (index 1) is the header row
+        const headerRow = rows[1] || []
+        const headers = headerRow.map((h) => String(h ?? '').trim())
+
+        // Data starts at row 3 (index 2)
+        const dataRows = rows.slice(2)
+
+        const objects = dataRows.map((r) => {
+          const obj: Record<string, any> = {}
+          headers.forEach((h, i) => { if (h) obj[h] = r[i] })
+          return obj
+        })
+
+        resolve(objects)
+      },
+      error: (err) => reject(err)
+    })
+  })
 }
-function go(p: number) { page.value = p; run() }
-run()
+
+/** Route upload clicks to the correct hidden input */
+function handleUploadClick(key: Row['key']) {
+  if (key === 'employees') empInput.value?.click()
+  else if (key === 'equipment') equipInput.value?.click()
+  // Staff/Jobs/Tasks/Customers can be wired the same way later
+}
+
+/** Handle Employees CSV selection */
+async function onEmpPicked (e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  uploadingEmp.value = true
+  empSummary.value = ''
+  try {
+    const rows = await readCsvFile(file)
+    // Calls server/api/crew/employees.post.ts
+    const res = await $fetch<{ ok: number; failed: number; results: any[] }>(
+      '/api/crew/employees',
+      { method: 'POST', body: { rows } }
+    )
+    empSummary.value = `Created ${res.ok}, failed ${res.failed}.`
+  } catch (err: any) {
+    empSummary.value = err?.data?.message || err?.message || 'Upload failed'
+  } finally {
+    if (empInput.value) empInput.value.value = ''
+    uploadingEmp.value = false
+  }
+}
+
+/** Handle Equipment CSV selection */
+async function onEquipPicked (e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  uploadingEquip.value = true
+  equipSummary.value = ''
+  try {
+    const rows = await readCsvFile(file)
+    // Calls server/api/crew/equipment.post.ts
+    const res = await $fetch<{ ok: number; failed: number; results: any[] }>(
+      '/api/crew/equipment',
+      { method: 'POST', body: { rows } }
+    )
+    equipSummary.value = `Created ${res.ok}, failed ${res.failed}.`
+  } catch (err: any) {
+    equipSummary.value = err?.data?.message || err?.message || 'Upload failed'
+  } finally {
+    if (equipInput.value) equipInput.value.value = ''
+    uploadingEquip.value = false
+  }
+}
 </script>
 
 <style scoped>
-/* --- Theme (light + dark) --- */
-:root {
-  color-scheme: light dark;
-  --bg: #f7f8fb;
-  --text: #0f172a;
-  --muted: #5b657a;
-  --panel: #ffffff;
-  --line: #e7e9f2;
-  --brand: #3b82f6;
-  --brand-600: #2563eb;
-  --danger: #ef4444;
-  --code: #0f172a;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0b1020;
-    --text: #e8ecf1;
-    --muted: #a8b0bd;
-    --panel: #11172c;
-    --line: #223056;
-    --brand: #60a5fa;
-    --brand-600: #3b82f6;
-    --danger: #ff6b6b;
-    --code: #e8ecf1;
-  }
+/* Page background */
+.page { min-height: 100vh; background: #EFF3F7; padding: 24px 16px; }
+
+/* Main rounded card */
+.board {
+  max-width: 1000px; margin: 0 auto; background: #fff; border-radius: 26px;
+  border: 1px solid #E6E8EE; box-shadow: 0 6px 28px rgba(16,24,40,.08);
+  padding: 16px 12px 20px; overflow: visible;
 }
 
-/* --- Layout --- */
-.container {
-  min-height: 100vh;
-  background: var(--bg);
-  color: var(--text);
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 32px 22px 60px;
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji";
+/* Header strip */
+.board-head {
+  display: grid; grid-template-columns: 1fr 220px 200px; align-items: center;
+  padding: 6px 12px 10px;
+}
+.col-title { text-align: center; color: #5F6B7A; font-weight: 700; font-size: 14px; }
+
+/* Rows */
+.row {
+  display: grid; grid-template-columns: 1fr 220px 200px; align-items: center;
+  gap: 10px; padding: 18px 14px; margin: 10px 6px; background: #fff;
+  border: 1px solid #E5E7EB; border-radius: 16px; transition: box-shadow .15s, border-color .15s;
+}
+.row:hover { border-color: #D7DBE3; box-shadow: 0 4px 18px rgba(16,24,40,.08); }
+
+.label { margin: 0; font-size: 22px; line-height: 1.2; color: #243042; font-weight: 800; }
+
+/* Icon buttons */
+.icon-btn {
+  justify-self: center; display: inline-flex; align-items: center; justify-content: center;
+  width: 72px; height: 56px; border-radius: 12px; background: #F8FAFC; border: 1px solid #E2E8F0;
+  color: #0B1526; cursor: pointer; text-decoration: none;
+}
+.icon-btn:hover { background: #F3F6FB; }
+.icon-btn.upload { font-size: 0; }
+.icon-btn.disabled { opacity: .45; pointer-events: none; }
+
+/* Tooltips */
+.tooltip-wrap { position: relative; display: inline-block; }
+.tooltip-bubble {
+  position: absolute; left: -20px; top: 42px; width: 600px; max-width: 70vw;
+  background: #000; color: #fff; padding: 18px 20px; border-radius: 24px; font-size: 18px; line-height: 1.45;
+  box-shadow: 0 10px 28px rgba(0,0,0,.35); opacity: 0; transform: translateY(6px); pointer-events: none;
+  transition: opacity .12s ease, transform .12s ease; z-index: 30;
+}
+.tooltip-wrap:hover .tooltip-bubble, .tooltip-wrap:focus-within .tooltip-bubble { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.tooltip-bubble::after {
+  content: ""; position: absolute; top: -18px; right: 160px; width: 0; height: 0;
+  border-left: 18px solid transparent; border-right: 18px solid transparent; border-bottom: 18px solid #000;
+  transform: rotate(-16deg);
+}
+.tooltip-bubble a { color: #60A5FA; text-decoration: underline; }
+
+/* Responsive */
+@media (max-width: 820px) {
+  .board-head { display: none; }
+  .row { grid-template-columns: 1fr auto auto; }
+  .tooltip-bubble { width: min(90vw, 600px); left: -6px; }
 }
 
-.header {
-  display: flex; align-items: flex-end; gap: 16px; justify-content: space-between;
-  margin-bottom: 18px;
-}
-.header h1 { font-size: 28px; line-height: 1.1; margin: 0; }
-.subtitle { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
-.pill {
-  background: var(--panel); border: 1px solid var(--line); color: var(--muted);
-  padding: 6px 12px; border-radius: 999px; font-size: 13px; white-space: nowrap;
-}
-
-/* --- Panels --- */
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.06);
-}
-
-/* --- Controls --- */
-.controls {
-  display: grid;
-  grid-template-columns: 1fr repeat(2, 140px) 1fr;
-  gap: 14px;
-  padding: 16px;
-  align-items: end;
-}
-.field { display: grid; gap: 8px; }
-.field span { font-size: 12px; color: var(--muted); }
-.field input {
-  height: 40px; border-radius: 10px; border: 1px solid var(--line);
-  background: transparent; color: var(--text); padding: 0 12px; outline: none;
-}
-.field input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in oklab, var(--brand) 25%, transparent); }
-.field.sm { width: 140px; }
-.actions { display: flex; align-items: center; gap: 10px; }
-.spacer { flex: 1; }
-.switch { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
-.switch input { transform: scale(1.05); }
-
-/* --- Buttons --- */
-.btn {
-  height: 40px; padding: 0 16px; border-radius: 10px; font-weight: 600;
-  border: 1px solid var(--line); background: var(--panel); color: var(--text);
-  cursor: pointer; transition: transform .02s ease, background .2s ease, border-color .2s ease;
-}
-.btn:hover { border-color: color-mix(in oklab, var(--brand) 40%, var(--line)); }
-.btn:active { transform: translateY(1px); }
-.btn.primary { background: var(--brand); border-color: var(--brand-600); color: white; }
-.btn.primary:hover { background: var(--brand-600); }
-.btn.ghost { background: transparent; }
-
-/* --- Status --- */
-.status { margin: 14px 4px; }
-.muted { color: var(--muted); }
-.error { color: var(--danger); }
-.pad { padding: 8px 2px; }
-
-/* --- Results --- */
-.results { margin-top: 8px; }
-
-/* Cards */
-.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
-.card { padding: 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); box-shadow: 0 2px 10px rgba(0,0,0,.05); }
-.card-title { margin: 0 0 10px; font-size: 16px; }
-.kv { display: grid; grid-template-columns: 1fr 2fr; gap: 6px 10px; font-size: 13px; }
-.kv dt { color: var(--muted); }
-.kv dd { margin: 0; white-space: pre-wrap; }
-
-/* Table */
-.table-wrap { padding: 0; overflow: hidden; }
-.table { width: 100%; border-collapse: collapse; }
-.table thead { background: color-mix(in oklab, var(--brand) 6%, transparent); }
-.table th, .table td { padding: 12px 14px; border-bottom: 1px solid var(--line); font-size: 14px; text-align: left; vertical-align: top; }
-.table tbody tr:nth-child(odd) { background: color-mix(in oklab, var(--panel) 80%, var(--bg)); }
-
-/* Pager */
-.pager { display: flex; gap: 12px; justify-content: center; margin: 18px 0; }
-
-/* Raw */
-.raw { margin-top: 16px; }
-.raw summary { cursor: pointer; color: var(--muted); padding: 10px 12px; }
-.raw pre {
-  margin: 0; padding: 14px; border-top: 1px solid var(--line);
-  background: #0b1328; color: #e8ecf1; border-radius: 0 0 14px 14px;
-  white-space: pre; overflow: auto;
-}
-@media (prefers-color-scheme: light) {
-  .raw pre { background: #0e1222; color: #eef3ff; }
+/* Screen-reader only (for hidden inputs) */
+.sr-only {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 </style>

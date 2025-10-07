@@ -1,5 +1,15 @@
+// tsconfig.json
 {
   "extends": "./.nuxt/tsconfig.json",
   "compilerOptions": { "skipLibCheck": true, "types": ["node"] },
-  "include": ["nuxt.config.ts","server/**/*.ts","types/**/*.d.ts","app.vue","pages/**/*.vue","components/**/*.vue"]
+  "include": [
+    "nuxt.config.ts",
+    "server/**/*.ts",
+    "utils/**/*.ts",          
+    "types/**/*.d.ts",
+    "app.vue",
+    "pages/**/*.vue",
+    "components/**/*.vue"
+  ],
+  "exclude": ["node_modules", ".nuxt", ".output"]
 }
