@@ -1,78 +1,109 @@
-// server/api/crew/employees.post.ts
-import { defineEventHandler, readBody, createError } from 'h3'
-import { crewFetch } from '~/utils/crewClient' // utils is at project root
+// server/api/crew/users/employees.post.ts
+import { defineEventHandler, readMultipartFormData, readBody, createError } from 'h3'
+import { parse } from 'csv-parse/sync'
+import { $fetch } from 'ofetch'
+import { useRuntimeConfig } from '#imports'
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody<{ rows: Record<string, any>[] }>(event)
-  if (!body?.rows || !Array.isArray(body.rows)) {
-    throw createError({ statusCode: 400, statusMessage: 'rows[] required' })
+  const { crewBaseUrl, crewApiToken } = useRuntimeConfig() as any
+  if (!crewBaseUrl || !crewApiToken) {
+    throw createError({ statusCode: 500, statusMessage: 'Missing API env vars' })
   }
 
-  // Required CSV headers (case-insensitive)
-  const REQUIRED = ['name', 'id']
+  let rows: Record<string, any>[] = []
 
-  // helpers
-  const norm = (v: unknown) => String(v ?? '').trim()
-  const toBool = (v: unknown) => {
-    const s = String(v ?? '').toLowerCase().trim()
-    return ['true', '1', 'yes', 'y', 'on'].includes(s)
-  }
-  const get = (row: Record<string, any>, keyLower: string) => {
-    const hit = Object.keys(row).find(k => k.toLowerCase() === keyLower)
-    return hit ? row[hit] : undefined
-  }
+  // --- 1️⃣ Handle CSV upload or JSON payload ---
+  const form = await readMultipartFormData(event)
+  const csvFile = form?.find(
+    (f) => f.filename?.endsWith('.csv') || f.type?.includes('csv')
+  )
 
-  // validate required
-  const problems: Array<{ index: number; missing: string[] }> = []
-  body.rows.forEach((row, i) => {
-    const missing = REQUIRED.filter(req => {
-      const realKey = Object.keys(row).find(k => k.toLowerCase() === req)
-      if (!realKey) return true
-      const val = norm(row[realKey])
-      return val.length === 0
-    })
-    if (missing.length) problems.push({ index: i + 1, missing })
-  })
-  if (problems.length) {
-    const msg = problems
-      .slice(0, 10)
-      .map(p => `Row ${p.index}: missing ${p.missing.join(', ')}`)
-      .join(' | ')
-    throw createError({ statusCode: 422, statusMessage: 'Validation failed', message: msg })
+  if (csvFile?.data) {
+    const csvText = csvFile.data.toString('utf-8')
+    rows = parse(csvText, { columns: true, skip_empty_lines: true })
+  } else {
+    const body = await readBody<{ rows?: Record<string, any>[] }>(event)
+    if (body?.rows?.length) rows = body.rows
   }
 
-  // CSV row -> upstream payload (adjust to match your Swagger field names)
-  const mapRow = (row: Record<string, any>) => ({
-    name:        norm(get(row, 'name')),
-    external_id: norm(get(row, 'id')),
-    foreman:     toBool(get(row, 'foreman')),
-    tracking:    toBool(get(row, 'tracking')),
-    active:      get(row, 'active') == null ? true : toBool(get(row, 'active')),
-    phone:       norm(get(row, 'phone')),
-    email:       norm(get(row, 'email')),
-    pin:         norm(get(row, 'pin')),
-  })
+  if (!rows?.length) {
+    throw createError({ statusCode: 400, statusMessage: 'CSV file is required' })
+  }
 
-  // Upstream endpoint (change if your API uses a different path)
-  const CREATE_PATH = '/api/users/employees'
+  // --- 2️⃣ Validate and normalize each line ---
+  const results: any[] = []
+  let lineNumber = 1
 
-  const results: Array<{ ok: boolean; index: number; id?: any; error?: any }> = []
-  for (const [i, row] of body.rows.entries()) {
-    try {
-      const res = await crewFetch<{ data?: { id?: any } }>(CREATE_PATH, {
-        method: 'POST',
-        body: mapRow(row)
-      })
-      results.push({ ok: true, index: i + 1, id: res?.data?.id })
-    } catch (e: any) {
+  for (const r of rows) {
+    lineNumber++
+
+    // Normalize and check required fields
+    const name = (r['Name First and Last'] ?? r['Name'] ?? r.name)?.toString().trim()
+    const pin = (r.PIN ?? r['Pin'] ?? r['pin'])?.toString().trim()
+
+    if (!name || !pin) {
       results.push({
         ok: false,
-        index: i + 1,
-        error: e?.data ?? e?.message ?? 'Request failed'
+        error: `Missing required field(s): ${
+          !name ? 'Name ' : ''
+        }${!pin ? 'PIN ' : ''}on line ${lineNumber}`,
+        row: r,
+      })
+      continue
+    }
+
+    // Normalize optional fields — convert blanks to null
+    const employee_id = r['Employee ID'] ? String(r['Employee ID']).trim() : null
+    const email = r.Email && String(r.Email).trim() !== '' ? String(r.Email).trim() : null
+    const role = r.Role && String(r.Role).trim() !== '' ? String(r.Role).trim() : 'user'
+    const company_id = Number(r['Company ID'] ?? 855)
+    const foreman =
+      r.Foreman && String(r.Foreman).toLowerCase().includes('true') ? 1 : 0
+
+    const payload = {
+      name,
+      pin,
+      employee_id,
+      email,
+      company_id,
+      role,
+      employee: 1,
+      active: 1,
+      foreman,
+    }
+
+    // --- 3️⃣ POST to the API ---
+    try {
+      const res = await $fetch(`${crewBaseUrl}/api/users`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${crewApiToken}`,
+          Accept: 'application/json',
+        },
+        body: payload,
+      })
+      results.push({ ok: true, res })
+    } catch (err: any) {
+      results.push({
+        ok: false,
+        error: err?.message || 'Request failed',
+        payload,
       })
     }
   }
 
-  const ok = results.filter(r => r.ok).length
-  return { ok, failed: results.length - ok, results }
+  // --- 4️⃣ Return summary ---
+  const ok = results.filter((r) => r.ok).length
+  const failed = results.length - ok
+  const validationErrors = results.filter((r) => !r.ok && r.error?.includes('Missing'))
+
+  return {
+    summary: {
+      total: results.length,
+      ok,
+      failed,
+      validationErrors: validationErrors.length,
+    },
+    results,
+  }
 })
