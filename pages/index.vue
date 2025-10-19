@@ -91,7 +91,8 @@
             (item.key === 'staff' && uploadingStaff) ||
             (item.key === 'equipment' && uploadingEquip) ||
             (item.key === 'jobs' && uploadingJobs) ||
-            (item.key === 'tasks' && uploadingTasks)
+            (item.key === 'tasks' && uploadingTasks) ||
+            (item.key === 'customers' && uploadingCustomers)
           "
         >
           <svg viewBox="0 0 64 64" width="48" height="48" aria-hidden="true">
@@ -129,16 +130,17 @@
         <p v-if="equipSummary">Equipment — {{ equipSummary }}</p>
         <p v-if="jobsSummary">Jobs — {{ jobsSummary }}</p>
         <p v-if="tasksSummary">Tasks — {{ tasksSummary }}</p>
+        <p v-if="customersSummary">Customers — {{ customersSummary }}</p>
 
         <!-- Display import errors -->
         <div
-          v-if="empErrors.length || staffErrors.length || equipErrors.length || jobsErrors.length || tasksErrors.length"
+          v-if="empErrors.length || staffErrors.length || equipErrors.length || jobsErrors.length || tasksErrors.length || customersErrors.length"
           style="margin-left:18px; margin-top:6px; color:#b91c1c; font-size:13px;"
         >
           <p><strong>Errors found while importing:</strong></p>
           <ul style="margin-top:2px; list-style-type:disc; margin-left:18px;">
             <li
-              v-for="(err, i) in [...empErrors, ...staffErrors, ...equipErrors, ...jobsErrors, ...tasksErrors]"
+              v-for="(err, i) in [...empErrors, ...staffErrors, ...equipErrors, ...jobsErrors, ...tasksErrors, ...customersErrors]"
               :key="i"
             >
               {{ err.error }}
@@ -154,11 +156,12 @@
     <input ref="equipInput" type="file" class="sr-only" accept=".csv,text/csv" @change="onEquipPicked" />
     <input ref="jobsInput" type="file" class="sr-only" accept=".csv,text/csv" @change="onJobsPicked" />
     <input ref="tasksInput" type="file" class="sr-only" accept=".csv,text/csv" @change="onTasksPicked" />
+    <input ref="customersInput" type="file" class="sr-only" accept=".csv,text/csv" @change="onCustomersPicked" />
   </main>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 import Papa from 'papaparse'
 
 type Row = {
@@ -224,31 +227,37 @@ const rows: Row[] = [
   }
 ]
 
-// Refs for file inputs
+// --- Refs for file inputs ---
 const empInput = ref<HTMLInputElement | null>(null)
 const staffInput = ref<HTMLInputElement | null>(null)
 const equipInput = ref<HTMLInputElement | null>(null)
 const jobsInput = ref<HTMLInputElement | null>(null)
 const tasksInput = ref<HTMLInputElement | null>(null)
+const customersInput = ref<HTMLInputElement | null>(null)
 
-// Uploading state & summaries
+// --- Uploading state & summaries ---
 const uploadingEmp = ref(false)
 const uploadingStaff = ref(false)
 const uploadingEquip = ref(false)
 const uploadingJobs = ref(false)
 const uploadingTasks = ref(false)
+const uploadingCustomers = ref(false)
+
 const empSummary = ref('')
 const staffSummary = ref('')
 const equipSummary = ref('')
 const jobsSummary = ref('')
 const tasksSummary = ref('')
+const customersSummary = ref('')
+
 const empErrors = ref<any[]>([])
 const staffErrors = ref<any[]>([])
 const equipErrors = ref<any[]>([])
 const jobsErrors = ref<any[]>([])
 const tasksErrors = ref<any[]>([])
+const customersErrors = ref<any[]>([])
 
-// Tooltip logic
+// --- Tooltip Logic ---
 const visibleTooltip = ref<string | null>(null)
 let hideTimeout: any = null
 
@@ -268,7 +277,7 @@ function hideTooltip() {
   visibleTooltip.value = null
 }
 
-// CSV parser
+// --- CSV Parser ---
 function readCsvFile(file: File): Promise<any[]> {
   return new Promise((resolve, reject) => {
     Papa.parse(file, {
@@ -296,7 +305,7 @@ function readCsvFile(file: File): Promise<any[]> {
   })
 }
 
-// Download template
+// --- Download Template ---
 async function downloadTemplate(item: Row) {
   if (!item.template) return
   try {
@@ -314,21 +323,28 @@ async function downloadTemplate(item: Row) {
   }
 }
 
-// Upload click handler
+// --- Upload Click Handler ---
 function handleUploadClick(key: string) {
   if (key === 'employees') empInput.value?.click()
   else if (key === 'staff') staffInput.value?.click()
   else if (key === 'equipment') equipInput.value?.click()
   else if (key === 'jobs') jobsInput.value?.click()
   else if (key === 'tasks') tasksInput.value?.click()
+  else if (key === 'customers') customersInput.value?.click()
 }
 
-// General upload handler
+// --- General Upload Handler (Updated with Console Reset + Scroll) ---
 async function uploadHandler(file: File | undefined, endpoint: string, summary: any, errors: any, uploading: any, input: any) {
   if (!file) return
+
+  // 🧹 Clear all previous summaries & errors before new upload
+  empSummary.value = staffSummary.value = equipSummary.value = jobsSummary.value = tasksSummary.value = customersSummary.value = ''
+  empErrors.value = staffErrors.value = equipErrors.value = jobsErrors.value = tasksErrors.value = customersErrors.value = []
+
   uploading.value = true
   summary.value = ''
   errors.value = []
+
   try {
     const rows = await readCsvFile(file)
     const res = await $fetch<{ summary: any; results: any[] }>(endpoint, {
@@ -342,10 +358,14 @@ async function uploadHandler(file: File | undefined, endpoint: string, summary: 
   } finally {
     if (input.value) input.value.value = ''
     uploading.value = false
+
+    // 📜 Auto-scroll to the console after upload
+    await nextTick()
+    document.querySelector('.board')?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }
 }
 
-// Individual handlers
+// --- Individual Upload Handlers ---
 async function onEmpPicked(e: Event) {
   await uploadHandler((e.target as HTMLInputElement).files?.[0], '/api/crew/employees', empSummary, empErrors, uploadingEmp, empInput)
 }
@@ -361,7 +381,12 @@ async function onJobsPicked(e: Event) {
 async function onTasksPicked(e: Event) {
   await uploadHandler((e.target as HTMLInputElement).files?.[0], '/api/crew/tasks', tasksSummary, tasksErrors, uploadingTasks, tasksInput)
 }
+async function onCustomersPicked(e: Event) {
+  await uploadHandler((e.target as HTMLInputElement).files?.[0], '/api/crew/customers', customersSummary, customersErrors, uploadingCustomers, customersInput)
+}
 </script>
+
+
 
 <style scoped>
 .page {
