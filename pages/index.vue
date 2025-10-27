@@ -277,6 +277,81 @@ function hideTooltip() {
   visibleTooltip.value = null
 }
 
+// --- Helper: Build friendly summary lines with hints ---
+function buildSummaryLine(label: string, s: any, errs: any[]) {
+  const ok = Number(s?.ok ?? 0)
+  const failed = Number(s?.failed ?? 0)
+  const validationErrors = Number(s?.validationErrors ?? 0)
+  const skipped = Number(s?.skippedDuplicates ?? 0)
+
+  // Collect error strings (deduped)
+  const errTexts = Array.from(new Set((errs || []).map((e: any) => e?.error || '')))
+  const topErrs = errTexts.slice(0, 3).join(' | ')
+
+  // Pick a helpful hint by pattern
+  const hint = getFixHint(label, errTexts, s)
+
+  if ((failed === 0) && (validationErrors === 0) && errTexts.length === 0) {
+    const extra = skipped ? ` (${skipped} duplicate${skipped > 1 ? 's' : ''} skipped)` : ''
+    return `✅ ${label} — Success: created ${ok}${extra}.`
+  }
+
+  const parts: string[] = [
+    `❌ ${label} — Imported with issues`,
+    `(created ${ok}, failed ${failed}${validationErrors ? `, validation ${validationErrors}` : ''}${skipped ? `, dupes skipped ${skipped}` : ''})`
+  ]
+
+  if (topErrs) parts.push(`Top errors: ${topErrs}`)
+  if (hint) parts.push(`Hint: ${hint}`)
+
+  return parts.join(' — ')
+}
+
+// --- Helper: Map common errors → concrete user hints ---
+function getFixHint(label: string, errors: string[], s?: any): string {
+  const has = (re: RegExp) => errors.some((e) => re.test(e))
+
+  // Header/required field issues
+  if (has(/CSV must include a column named "Task Name"/i)) {
+    return `Make sure your CSV header row contains an exact "Task Name" column. Download a fresh template if needed.`
+  }
+  if (has(/CSV must include a column named "Equipment name"/i)) {
+    return `Make sure your CSV header row contains an exact "Equipment name" column. Use the Equipment template.`
+  }
+  if (has(/Missing required field/i)) {
+    const req =
+      label === 'Tasks' ? 'Task Name' :
+      label === 'Equipment' ? 'Equipment name' :
+      'all required columns'
+    return `Fill the "${req}" column for every row (no blanks).`
+  }
+
+  // Duplicate rows
+  if (has(/Duplicate in upload/i)) {
+    return `Remove duplicate rows/names in your CSV before uploading.`
+  }
+
+  // Company context null (from backend job/queue)
+  if (has(/company.*null/i) || has(/must be of type App\\Company, null given/i)) {
+    const cid = s?.company_id_used
+    return `Set a company context. Recommended: set CREW_COMPANY_ID in your environment (e.g., ${cid ?? '855'}) or use a company-scoped API token.`
+  }
+
+  // Validation vs server failures
+  if (has(/HTTP 422/i) || has(/Unprocessable Entity/i)) {
+    return `One or more fields failed validation. Check cost codes/units formatting and required columns.`
+  }
+  if (has(/HTTP 4\d\d/i)) {
+    return `Request was rejected by the server. Verify your CSV matches the template and your token has permission.`
+  }
+  if (has(/HTTP 5\d\d|Request failed|Server error/i)) {
+    return `Server error. Try again in a moment; if it persists, contact support with the first error shown.`
+  }
+
+  // Default fallback
+  return `Check the first few errors below, fix the CSV (headers + required fields), then re-upload.`
+}
+
 // --- CSV Parser ---
 function readCsvFile(file: File): Promise<any[]> {
   return new Promise((resolve, reject) => {
@@ -333,8 +408,16 @@ function handleUploadClick(key: string) {
   else if (key === 'customers') customersInput.value?.click()
 }
 
-// --- General Upload Handler (Updated with Console Reset + Scroll) ---
-async function uploadHandler(file: File | undefined, endpoint: string, summary: any, errors: any, uploading: any, input: any) {
+// --- General Upload Handler (with friendly summaries + hints) ---
+async function uploadHandler(
+  file: File | undefined,
+  endpoint: string,
+  label: string,
+  summary: any,
+  errors: any,
+  uploading: any,
+  input: any
+) {
   if (!file) return
 
   // 🧹 Clear all previous summaries & errors before new upload
@@ -351,10 +434,18 @@ async function uploadHandler(file: File | undefined, endpoint: string, summary: 
       method: 'POST',
       body: { rows }
     })
-    summary.value = `Created ${res.summary.ok}, failed ${res.summary.failed}.`
-    if (Array.isArray(res.results)) errors.value = res.results.filter((r) => !r.ok && r.error)
+
+    // collect errors for this upload
+    const rowErrors = Array.isArray(res.results)
+      ? res.results.filter((r: any) => !r?.ok && r?.error)
+      : []
+    errors.value = rowErrors
+
+    // 🌟 Friendly summary instead of "Created X, failed Y"
+    summary.value = buildSummaryLine(label, res.summary, rowErrors)
   } catch (err: any) {
-    summary.value = err?.data?.message || err?.message || 'Upload failed'
+    const msg = err?.data?.message || err?.message || 'Upload failed'
+    summary.value = `❌ ${label} — ${msg}. Hint: ensure your CSV uses the exact template headers and that the server is reachable.`
   } finally {
     if (input.value) input.value.value = ''
     uploading.value = false
@@ -367,26 +458,72 @@ async function uploadHandler(file: File | undefined, endpoint: string, summary: 
 
 // --- Individual Upload Handlers ---
 async function onEmpPicked(e: Event) {
-  await uploadHandler((e.target as HTMLInputElement).files?.[0], '/api/crew/employees', empSummary, empErrors, uploadingEmp, empInput)
+  await uploadHandler(
+    (e.target as HTMLInputElement).files?.[0],
+    '/api/crew/employees',
+    'Employees & Foreman',
+    empSummary,
+    empErrors,
+    uploadingEmp,
+    empInput
+  )
 }
 async function onStaffPicked(e: Event) {
-  await uploadHandler((e.target as HTMLInputElement).files?.[0], '/api/crew/staff', staffSummary, staffErrors, uploadingStaff, staffInput)
+  await uploadHandler(
+    (e.target as HTMLInputElement).files?.[0],
+    '/api/crew/staff',
+    'Staff',
+    staffSummary,
+    staffErrors,
+    uploadingStaff,
+    staffInput
+  )
 }
 async function onEquipPicked(e: Event) {
-  await uploadHandler((e.target as HTMLInputElement).files?.[0], '/api/crew/equipment', equipSummary, equipErrors, uploadingEquip, equipInput)
+  await uploadHandler(
+    (e.target as HTMLInputElement).files?.[0],
+    '/api/crew/equipment',
+    'Equipment',
+    equipSummary,
+    equipErrors,
+    uploadingEquip,
+    equipInput
+  )
 }
 async function onJobsPicked(e: Event) {
-  await uploadHandler((e.target as HTMLInputElement).files?.[0], '/api/crew/jobs', jobsSummary, jobsErrors, uploadingJobs, jobsInput)
+  await uploadHandler(
+    (e.target as HTMLInputElement).files?.[0],
+    '/api/crew/jobs',
+    'Jobs',
+    jobsSummary,
+    jobsErrors,
+    uploadingJobs,
+    jobsInput
+  )
 }
 async function onTasksPicked(e: Event) {
-  await uploadHandler((e.target as HTMLInputElement).files?.[0], '/api/crew/tasks', tasksSummary, tasksErrors, uploadingTasks, tasksInput)
+  await uploadHandler(
+    (e.target as HTMLInputElement).files?.[0],
+    '/api/crew/tasks',
+    'Tasks',
+    tasksSummary,
+    tasksErrors,
+    uploadingTasks,
+    tasksInput
+  )
 }
 async function onCustomersPicked(e: Event) {
-  await uploadHandler((e.target as HTMLInputElement).files?.[0], '/api/crew/customers', customersSummary, customersErrors, uploadingCustomers, customersInput)
+  await uploadHandler(
+    (e.target as HTMLInputElement).files?.[0],
+    '/api/crew/customers',
+    'Customers',
+    customersSummary,
+    customersErrors,
+    uploadingCustomers,
+    customersInput
+  )
 }
 </script>
-
-
 
 <style scoped>
 .page {

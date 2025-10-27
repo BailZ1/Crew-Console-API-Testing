@@ -1,119 +1,185 @@
 // server/api/crew/tasks.post.ts
 import { defineEventHandler, readBody, createError } from 'h3'
+import { $fetch } from 'ofetch'
+import { useRuntimeConfig } from '#imports'
+
+type CsvRow = Record<string, any>
+
+interface PostResult {
+  ok: boolean
+  res?: any
+  error?: string
+  row?: CsvRow
+  payload?: any
+  skippedReason?: string
+  index?: number
+}
+
+function parseYes(val: any): boolean {
+  if (val == null) return false
+  const s = val.toString().trim().toLowerCase()
+  return s === 'yes' || s === 'y' || s === 'true' || s === '1'
+}
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody(event)
+  const { crewBaseUrl, crewApiToken, crewCompanyId } = useRuntimeConfig() as any
+  if (!crewBaseUrl || !crewApiToken) {
+    throw createError({ statusCode: 500, statusMessage: 'Missing API env vars' })
+  }
 
+  // Expect { rows: [...] } from frontend (already parsed from CSV)
+  const body = await readBody<{ rows: CsvRow[] }>(event)
   if (!body?.rows?.length) {
     throw createError({ statusCode: 400, statusMessage: 'rows[] required' })
   }
 
-  // Load environment variables for authenticated API access
-  const baseUrl = process.env.NUXT_CREW_BASE_URL || ''
-  const apiToken = process.env.NUXT_CREW_API_TOKEN || ''
-
-  if (!baseUrl || !apiToken) {
+  // Ensure the required header exists exactly as specified
+  const firstRow = body.rows[0] || {}
+  if (!Object.prototype.hasOwnProperty.call(firstRow, 'Task Name')) {
     throw createError({
-      statusCode: 500,
-      statusMessage: 'Missing NUXT_CREW_BASE_URL or NUXT_CREW_API_TOKEN'
+      statusCode: 400,
+      statusMessage: 'CSV must include a column named "Task Name".'
     })
   }
 
-  const results: any[] = []
+  // Resolve company_id: prefer env, else probe API for an existing default-task/company
+  let resolvedCompanyId: number | null =
+    crewCompanyId != null && crewCompanyId !== '' ? Number(crewCompanyId) : null
+
+  if (!resolvedCompanyId) {
+    try {
+      const probe: any = await $fetch(`${crewBaseUrl}/api/default-tasks`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${crewApiToken}` }
+      })
+      const cid = probe?.data?.[0]?.company_id
+      if (cid != null) resolvedCompanyId = Number(cid)
+    } catch {
+      // best-effort only; proceed
+    }
+    // Fallback probe via equipment (optional)
+    if (!resolvedCompanyId) {
+      try {
+        const probeEq: any = await $fetch(`${crewBaseUrl}/api/equipment`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${crewApiToken}` }
+        })
+        const cid2 = probeEq?.data?.[0]?.company_id
+        if (cid2 != null) resolvedCompanyId = Number(cid2)
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  const results: PostResult[] = []
+  let validationErrors = 0
+  let skippedDuplicates = 0
   let ok = 0
   let failed = 0
 
-  // Default job_id (update dynamically if needed)
-  const DEFAULT_JOB_ID = 45151
+  // De-dupe within this upload by Task Name (case-insensitive)
+  const seenNames = new Set<string>()
 
   for (let i = 0; i < body.rows.length; i++) {
-    const r = body.rows[i]
+    const r = body.rows[i] || {}
 
-    // Required
-    const name =
-      r['Task Name'] ??
-      r['task name'] ??
-      r['Name'] ??
-      r['name'] ??
-      null
-
-    // Optional
-    const cost_code = r['Cost Code'] ?? r['cost code'] ?? ''
-    const unit = r['Unit'] ?? r['unit'] ?? null
-    const otExempt = r['OT Exempt Task'] ?? r['ot exempt task'] ?? null
-
-    // Validation
-    if (!name || !name.toString().trim()) {
-      failed++
+    // --- Extract and validate required field (exact header only) ---
+    const rawName = r['Task Name']
+    const name = (rawName ?? '').toString().trim()
+    if (!name) {
       results.push({
         ok: false,
-        error: `Row ${i + 1}: Missing required Task Name`
+        error: `Missing required field: Task Name (line ${i + 2})`,
+        row: r,
+        index: i
       })
+      validationErrors++
       continue
     }
 
-    // Parse OT Exempt
-    const countOvertime =
-      otExempt &&
-      ['yes', 'true', '1'].includes(otExempt.toString().trim().toLowerCase())
-        ? 0 // exempt (don’t count OT)
-        : 1 // normal OT counting
+    // --- Skip duplicates in the same upload ---
+    const key = name.toLowerCase()
+    if (seenNames.has(key)) {
+      results.push({
+        ok: false,
+        skippedReason: 'Duplicate in upload (same Task Name)',
+        row: r,
+        index: i
+      })
+      skippedDuplicates++
+      continue
+    }
+    seenNames.add(key)
 
-    // Build Task payload
-    const task = {
-      company_id: 855,
-      job_id: DEFAULT_JOB_ID,
-      name: name.toString().trim(),
-      cost_code: cost_code.toString().trim() || '',
-      complete: 0,
-      deleted_at: null,
-      unit: unit?.toString().trim() || null,
-      estimated_qty: null,
-      actual_qty: null,
-      estimated_hours: null,
-      default_task_id: null,
-      total_overtime_hours: 0,
-      count_overtime: countOvertime,
-      task_category_id: null,
-      active: 1
+    // --- Optional fields (exact headers) ---
+    const cost_code = (r['Cost Code'] ?? '').toString().trim()
+    const unitRaw = r['Unit']
+    const unit = (unitRaw ?? '').toString().trim() || null
+
+    // OT Exempt Task => count_overtime (0 if exempt, else 1)
+    const otExemptRaw = r['OT Exempt Task']
+    const count_overtime = parseYes(otExemptRaw) ? 0 : 1
+
+    // --- Build payload for API /api/default-tasks ---
+    const payload: any = {
+      name,
+      cost_code,
+      unit,
+      count_overtime,
+      // You can set task_category_id if you add it to your CSV; null otherwise
+      task_category_id: null
+    }
+    if (resolvedCompanyId != null) {
+      payload.company_id = resolvedCompanyId
     }
 
     try {
-      const response = await $fetch(`${baseUrl}/api/tasks`, {
+      const res = await $fetch(`${crewBaseUrl}/api/default-tasks`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: task
+        headers: { Authorization: `Bearer ${crewApiToken}` },
+        body: payload
       })
-
-      // ✅ Debug logs to verify backend behavior
-      //console.log(`✅ TASK POST RESPONSE (Row ${i + 1}):`, response)
-
+      results.push({ ok: true, res, index: i })
       ok++
-      results.push({ ok: true, data: response })
     } catch (err: any) {
-      // ❌ Detailed error logging
-      console.error(`❌ TASK POST ERROR (Row ${i + 1}):`, err)
-
-      failed++
-      const status = err?.response?.status || err?.statusCode || 'Unknown'
-      const msg =
-        err?.data?.message ||
-        err?.response?._data?.message ||
+      const status = err?.response?.status
+      const data = err?.response?._data ?? err?.data
+      const rawMsg =
+        (typeof data === 'string' && data) ||
+        (data?.message as string) ||
         err?.message ||
         'Request failed'
 
+      const looksLikeNullCompany =
+        /PushToJotformForms::__construct\(\): Argument #1 .* must be of type App\\Company, null given/i.test(
+          rawMsg
+        )
+
+      const msg = looksLikeNullCompany
+        ? `Server rejected the request because 'company' resolved to null. Provide a company context (set runtime env CREW_COMPANY_ID or ensure the API token is scoped to a company). Raw: ${rawMsg}`
+        : (status ? `HTTP ${status}: ${rawMsg}` : rawMsg)
+
       results.push({
         ok: false,
-        error: `Row ${i + 1}: [${status}] ${msg}`
+        error: msg,
+        payload,
+        row: r,
+        index: i
       })
+      failed++
     }
   }
 
   return {
-    summary: { ok, failed },
+    summary: {
+      total: results.length,
+      ok,
+      failed,
+      validationErrors,
+      skippedDuplicates,
+      company_id_used: resolvedCompanyId ?? null
+    },
     results
   }
 })
