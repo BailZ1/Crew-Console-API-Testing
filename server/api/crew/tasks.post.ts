@@ -1,7 +1,6 @@
 // server/api/crew/tasks.post.ts
 import { defineEventHandler, readBody, createError } from 'h3'
-import { $fetch } from 'ofetch'
-import { useRuntimeConfig } from '#imports'
+import { createCrewClient } from '~/utils/crewClient'
 
 type CsvRow = Record<string, any>
 
@@ -22,10 +21,7 @@ function parseYes(val: any): boolean {
 }
 
 export default defineEventHandler(async (event) => {
-  const { crewBaseUrl, crewApiToken, crewCompanyId } = useRuntimeConfig() as any
-  if (!crewBaseUrl || !crewApiToken) {
-    throw createError({ statusCode: 500, statusMessage: 'Missing API env vars' })
-  }
+  const client = createCrewClient()
 
   // Expect { rows: [...] } from frontend (already parsed from CSV)
   const body = await readBody<{ rows: CsvRow[] }>(event)
@@ -42,34 +38,15 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Resolve company_id: prefer env, else probe API for an existing default-task/company
-  let resolvedCompanyId: number | null =
-    crewCompanyId != null && crewCompanyId !== '' ? Number(crewCompanyId) : null
-
-  if (!resolvedCompanyId) {
-    try {
-      const probe: any = await $fetch(`${crewBaseUrl}/api/default-tasks`, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${crewApiToken}` }
-      })
-      const cid = probe?.data?.[0]?.company_id
-      if (cid != null) resolvedCompanyId = Number(cid)
-    } catch {
-      // best-effort only; proceed
-    }
-    // Fallback probe via equipment (optional)
-    if (!resolvedCompanyId) {
-      try {
-        const probeEq: any = await $fetch(`${crewBaseUrl}/api/equipment`, {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${crewApiToken}` }
-        })
-        const cid2 = probeEq?.data?.[0]?.company_id
-        if (cid2 != null) resolvedCompanyId = Number(cid2)
-      } catch {
-        // ignore
-      }
-    }
+  // 🔎 Resolve company_id once from /api/users (centralized client)
+  let companyId: number
+  try {
+    companyId = await client.resolveCompanyId()
+  } catch (e: any) {
+    throw createError({
+      statusCode: e?.response?.status || 500,
+      statusMessage: e?.message || 'Unable to resolve company_id from /api/users'
+    })
   }
 
   const results: PostResult[] = []
@@ -127,37 +104,30 @@ export default defineEventHandler(async (event) => {
       cost_code,
       unit,
       count_overtime,
-      // You can set task_category_id if you add it to your CSV; null otherwise
-      task_category_id: null
-    }
-    if (resolvedCompanyId != null) {
-      payload.company_id = resolvedCompanyId
+      task_category_id: null,
+      company_id: companyId
     }
 
     try {
-      const res = await $fetch(`${crewBaseUrl}/api/default-tasks`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${crewApiToken}` },
-        body: payload
-      })
+      const res = await client.post('/api/default-tasks', payload)
       results.push({ ok: true, res, index: i })
       ok++
     } catch (err: any) {
       const status = err?.response?.status
-      const data = err?.response?._data ?? err?.data
+      const rawData = err?.response?._data
       const rawMsg =
-        (typeof data === 'string' && data) ||
-        (data?.message as string) ||
+        (typeof rawData === 'string' && rawData) ||
+        rawData?.message ||
         err?.message ||
         'Request failed'
 
+      // Friendlier hint for the specific "company is null" failure
       const looksLikeNullCompany =
-        /PushToJotformForms::__construct\(\): Argument #1 .* must be of type App\\Company, null given/i.test(
-          rawMsg
-        )
+        /PushToJotformForms::__construct\(\): Argument #1 .* must be of type App\\Company, null given/i.test(rawMsg) ||
+        /company.*null/i.test(rawMsg)
 
       const msg = looksLikeNullCompany
-        ? `Server rejected the request because 'company' resolved to null. Provide a company context (set runtime env CREW_COMPANY_ID or ensure the API token is scoped to a company). Raw: ${rawMsg}`
+        ? `Server rejected the request because 'company' resolved to null. Ensure your API token is company-scoped or that /api/users is accessible to resolve company_id. Raw: ${rawMsg}`
         : (status ? `HTTP ${status}: ${rawMsg}` : rawMsg)
 
       results.push({
@@ -178,7 +148,7 @@ export default defineEventHandler(async (event) => {
       failed,
       validationErrors,
       skippedDuplicates,
-      company_id_used: resolvedCompanyId ?? null
+      company_id_used: companyId
     },
     results
   }

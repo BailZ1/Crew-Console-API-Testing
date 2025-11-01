@@ -1,14 +1,10 @@
 // server/api/crew/users/employees.post.ts
 import { defineEventHandler, readMultipartFormData, readBody, createError } from 'h3'
 import { parse } from 'csv-parse/sync'
-import { $fetch } from 'ofetch'
-import { useRuntimeConfig } from '#imports'
+import { createCrewClient } from '~/utils/crewClient'
 
 export default defineEventHandler(async (event) => {
-  const { crewBaseUrl, crewApiToken } = useRuntimeConfig() as any
-  if (!crewBaseUrl || !crewApiToken) {
-    throw createError({ statusCode: 500, statusMessage: 'Missing API env vars' })
-  }
+  const client = createCrewClient()
 
   let rows: Record<string, any>[] = []
 
@@ -30,6 +26,17 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'CSV file is required' })
   }
 
+  // 🔎 Resolve default company_id once from /api/users (can be overridden per row)
+  let resolvedCompanyId: number | null = null
+  try {
+    resolvedCompanyId = await client.resolveCompanyId()
+  } catch (e: any) {
+    throw createError({
+      statusCode: e?.response?.status || 500,
+      statusMessage: e?.message || 'Unable to resolve company_id from /api/users'
+    })
+  }
+
   // --- 2️⃣ Validate and normalize each line ---
   const results: any[] = []
   let lineNumber = 1
@@ -44,10 +51,8 @@ export default defineEventHandler(async (event) => {
     if (!name || !pin) {
       results.push({
         ok: false,
-        error: `Missing required field(s): ${
-          !name ? 'Name ' : ''
-        }${!pin ? 'PIN ' : ''}on line ${lineNumber}`,
-        row: r,
+        error: `Missing required field(s):${!name ? ' Name' : ''}${!pin ? ' PIN' : ''} on line ${lineNumber}`,
+        row: r
       })
       continue
     }
@@ -56,7 +61,13 @@ export default defineEventHandler(async (event) => {
     const employee_id = r['Employee ID'] ? String(r['Employee ID']).trim() : null
     const email = r.Email && String(r.Email).trim() !== '' ? String(r.Email).trim() : null
     const role = r.Role && String(r.Role).trim() !== '' ? String(r.Role).trim() : 'user'
-    const company_id = Number(r['Company ID'] ?? 855)
+    // Allow per-row override; otherwise use resolved company_id
+    const company_id = (() => {
+      const raw = r['Company ID']
+      if (raw === undefined || raw === null || String(raw).trim() === '') return resolvedCompanyId
+      const n = Number(String(raw).trim())
+      return Number.isNaN(n) ? resolvedCompanyId : n
+    })()
     const foreman =
       r.Foreman && String(r.Foreman).toLowerCase().includes('true') ? 1 : 0
 
@@ -69,25 +80,23 @@ export default defineEventHandler(async (event) => {
       role,
       employee: 1,
       active: 1,
-      foreman,
+      foreman
     }
 
-    // --- 3️⃣ POST to the API ---
+    // --- 3️⃣ POST to the API (centralized client handles auth + errors) ---
     try {
-      const res = await $fetch(`${crewBaseUrl}/api/users`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${crewApiToken}`,
-          Accept: 'application/json',
-        },
-        body: payload,
-      })
+      const res = await client.post('/api/users', payload)
       results.push({ ok: true, res })
     } catch (err: any) {
+      const status = err?.response?.status || 'Unknown'
+      const msg =
+        err?.response?._data?.message ||
+        err?.message ||
+        'Request failed'
       results.push({
         ok: false,
-        error: err?.message || 'Request failed',
-        payload,
+        error: `[${status}] ${msg}`,
+        payload
       })
     }
   }
@@ -95,7 +104,7 @@ export default defineEventHandler(async (event) => {
   // --- 4️⃣ Return summary ---
   const ok = results.filter((r) => r.ok).length
   const failed = results.length - ok
-  const validationErrors = results.filter((r) => !r.ok && r.error?.includes('Missing'))
+  const validationErrors = results.filter((r) => !r.ok && String(r.error || '').includes('Missing'))
 
   return {
     summary: {
@@ -103,7 +112,8 @@ export default defineEventHandler(async (event) => {
       ok,
       failed,
       validationErrors: validationErrors.length,
+      company_id_used: resolvedCompanyId
     },
-    results,
+    results
   }
 })

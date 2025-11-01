@@ -1,5 +1,6 @@
 // server/api/crew/jobs.post.ts
 import { defineEventHandler, readBody, createError } from 'h3'
+import { createCrewClient } from '~/utils/crewClient'
 
 export default defineEventHandler(async (event) => {
   const body = await readBody(event)
@@ -8,14 +9,17 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'rows[] required' })
   }
 
-  // ✅ Load environment variables
-  const baseUrl = process.env.NUXT_CREW_BASE_URL || ''
-  const apiToken = process.env.NUXT_CREW_API_TOKEN || ''
+  // 🔁 Centralized client (handles auth + base URL + error normalization)
+  const client = createCrewClient()
 
-  if (!baseUrl || !apiToken) {
+  // 🔎 Dynamically resolve company_id from /api/users (first user's company_id)
+  let companyId: number
+  try {
+    companyId = await client.resolveCompanyId()
+  } catch (e: any) {
     throw createError({
-      statusCode: 500,
-      statusMessage: 'Missing NUXT_CREW_BASE_URL or NUXT_CREW_API_TOKEN'
+      statusCode: e?.response?.status || 500,
+      statusMessage: e?.message || 'Unable to resolve company_id from /api/users'
     })
   }
 
@@ -51,7 +55,7 @@ export default defineEventHandler(async (event) => {
     }
 
     const job = {
-      company_id: 855,
+      company_id: companyId,          // 🔹 dynamically resolved
       active: 1,
       name: name.toString().trim(),
       number: number.toString().trim() || '',
@@ -60,23 +64,14 @@ export default defineEventHandler(async (event) => {
     }
 
     try {
-      // ✅ Authenticated POST request
-      const response = await $fetch(`${baseUrl}/api/jobs`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: job
-      })
-
+      // ✅ POST via centralized client
+      const response = await client.post('/api/jobs', job)
       ok++
       results.push({ ok: true, data: response })
     } catch (err: any) {
       failed++
-      const status = err?.response?.status || err?.statusCode || 'Unknown'
+      const status = err?.response?.status || 'Unknown'
       const msg =
-        err?.data?.message ||
         err?.response?._data?.message ||
         err?.message ||
         'Request failed'

@@ -1,7 +1,6 @@
 // server/api/crew/equipment.post.ts
 import { defineEventHandler, readBody, createError } from 'h3'
-import { $fetch } from 'ofetch'
-import { useRuntimeConfig } from '#imports'
+import { createCrewClient } from '~/utils/crewClient'
 
 type CsvRow = Record<string, any>
 
@@ -16,10 +15,8 @@ interface PostResult {
 }
 
 export default defineEventHandler(async (event) => {
-  const { crewBaseUrl, crewApiToken, crewCompanyId } = useRuntimeConfig() as any
-  if (!crewBaseUrl || !crewApiToken) {
-    throw createError({ statusCode: 500, statusMessage: 'Missing API env vars' })
-  }
+  // Centralized client (handles auth + errors)
+  const client = createCrewClient()
 
   // Expect { rows: [...] } from frontend (already parsed from CSV)
   const body = await readBody<{ rows: CsvRow[] }>(event)
@@ -27,7 +24,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'rows[] required' })
   }
 
-  // Ensure the required header exists
+  // Ensure the required header exists (exact match)
   const firstRow = body.rows[0] || {}
   if (!Object.prototype.hasOwnProperty.call(firstRow, 'Equipment name')) {
     throw createError({
@@ -36,23 +33,13 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Resolve company_id: prefer env, else probe API for an existing record
-  let resolvedCompanyId: number | null =
-    crewCompanyId != null && crewCompanyId !== ''
-      ? Number(crewCompanyId)
-      : null
-
-  if (!resolvedCompanyId) {
-    try {
-      const probe: any = await $fetch(`${crewBaseUrl}/api/equipment`, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${crewApiToken}` }
-      })
-      const cid = probe?.data?.[0]?.company_id
-      if (cid != null) resolvedCompanyId = Number(cid)
-    } catch {
-      // Best-effort inference only; continue without blocking
-    }
+  // Resolve company_id from /api/users (best-effort; continue if unavailable)
+  let resolvedCompanyId: number | null = null
+  try {
+    resolvedCompanyId = await client.resolveCompanyId()
+  } catch {
+    // Allow to proceed; backend may default or return a helpful error we surface below
+    resolvedCompanyId = null
   }
 
   const results: PostResult[] = []
@@ -101,21 +88,17 @@ export default defineEventHandler(async (event) => {
       payload.company_id = resolvedCompanyId
     }
 
-    // --- POST to API ---
+    // --- POST to API via centralized client ---
     try {
-      const res = await $fetch(`${crewBaseUrl}/api/equipment`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${crewApiToken}` },
-        body: payload
-      })
+      const res = await client.post('/api/equipment', payload)
       results.push({ ok: true, res, index: i })
       ok++
     } catch (err: any) {
       const status = err?.response?.status
-      const data = err?.response?._data ?? err?.data
+      const rawData = err?.response?._data
       const rawMsg =
-        (typeof data === 'string' && data) ||
-        (data?.message as string) ||
+        (typeof rawData === 'string' && rawData) ||
+        rawData?.message ||
         err?.message ||
         'Request failed'
 
@@ -126,7 +109,7 @@ export default defineEventHandler(async (event) => {
         )
 
       const msg = looksLikeNullCompany
-        ? `Server rejected the request because 'company' resolved to null. Supply a company context (set runtime env CREW_COMPANY_ID or ensure the API token is scoped to a company). Raw: ${rawMsg}`
+        ? `Server rejected the request because 'company' resolved to null. Supply a company context (ensure your API token is company-scoped or that /api/users is accessible to resolve company_id). Raw: ${rawMsg}`
         : (status ? `HTTP ${status}: ${rawMsg}` : rawMsg)
 
       results.push({
