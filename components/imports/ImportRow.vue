@@ -1,12 +1,7 @@
 <template>
   <article class="row">
-    <h3 class="label">
-      <span
-        class="tooltip-wrap"
-        tabindex="0"
-        @mouseenter="$emit('show', item.key)"
-        @mouseleave="$emit('hideDelayed', item.key)"
-      >
+    <h3 class="label" @mouseenter="$emit('show', item.key)" @mouseleave="$emit('hideDelayed', item.key)">
+      <span class="tooltip-wrap" style="font-family: sans-serif" tabindex="0">
         {{ item.name }}
         <span
           class="tooltip-bubble"
@@ -16,11 +11,10 @@
           @mouseleave="$emit('hide')"
         >
           <template v-for="(line, i) in item.desc" :key="i">
-            <span>{{ line }}</span><br />
+            <span>{{ line }}</span
+            ><br />
           </template>
-          <a href="#" target="_blank" rel="noreferrer">
-            Watch here on how to fill out the .csv file.
-          </a>
+          <a href="#" target="_blank" rel="noreferrer"> Watch here on how to fill out the .csv file. </a>
         </span>
       </span>
     </h3>
@@ -32,7 +26,7 @@
       aria-label="Download CSV template"
       @click="item.template && $emit('download', item)"
     >
-      <svg viewBox="0 0 64 64" width="40" height="40" aria-hidden="true">
+      <svg viewBox="0 0 56 56" width="40" height="40" aria-hidden="true">
         <rect x="10" y="12" width="36" height="44" rx="4" fill="#E7EEF7" stroke="#9CB3D2" stroke-width="2" />
         <path d="M38 12v12h12" fill="#E7EEF7" stroke="#9CB3D2" stroke-width="2" />
         <rect x="16" y="42" width="28" height="14" rx="6" :fill="item.template ? '#22C55E' : '#A3A3A3'" />
@@ -58,16 +52,30 @@
       :disabled="disabled"
     >
       <svg viewBox="0 0 64 64" width="48" height="48" aria-hidden="true">
-        <path d="M22 30l10-12 10 12" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+        <path
+          d="M22 30l10-12 10 12"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="4.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
         <path d="M32 18v26" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" />
-        <path d="M14 44v6a6 6 0 006 6h24a6 6 0 006-6v-6" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+        <path
+          d="M14 44v6a6 6 0 006 6h24a6 6 0 006-6v-6"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="4.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
       </svg>
     </button>
   </article>
 </template>
 
 <script setup lang="ts">
-import type { ImportRow as Row } from '~/data/importRows'
+import type { ImportRow as Row } from "~/data/importRows"
 
 const props = defineProps<{
   item: Row
@@ -76,12 +84,12 @@ const props = defineProps<{
 }>()
 
 defineEmits<{
-  (e: 'show', key: Row['key']): void
-  (e: 'hideDelayed', key: Row['key']): void
-  (e: 'cancelHide'): void
-  (e: 'hide'): void
-  (e: 'download', row: Row): void
-  (e: 'request-upload', key: Row['key']): void
+  (e: "show", key: Row["key"]): void
+  (e: "hideDelayed", key: Row["key"]): void
+  (e: "cancelHide"): void
+  (e: "hide"): void
+  (e: "download", row: Row): void
+  (e: "request-upload", key: Row["key"]): void
 }>()
 </script>
 
@@ -94,12 +102,12 @@ defineEmits<{
   padding: 18px 14px;
   margin: 10px 6px;
   background: #fff;
-  border: 1px solid #E5E7EB;
+  border: 1px solid #e5e7eb;
   border-radius: 16px;
   transition: 0.15s;
 }
 .row:hover {
-  border-color: #D7DBE3;
+  border-color: #d7dbe3;
   box-shadow: 0 4px 18px rgba(16, 24, 40, 0.08);
 }
 .label {
@@ -114,16 +122,16 @@ defineEmits<{
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
+  width: 56px;
   height: 56px;
-  border-radius: 12px;
-  background: #F8FAFC;
-  border: 1px solid #E2E8F0;
-  color: #0B1526;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: #0b1526;
   cursor: pointer;
 }
 .icon-btn:hover {
-  background: #F3F6FB;
+  background: #f3f6fb;
 }
 .icon-btn.upload {
   font-size: 0;
@@ -162,7 +170,7 @@ defineEmits<{
   pointer-events: auto;
 }
 .tooltip-bubble::after {
-  content: '';
+  content: "";
   position: absolute;
   top: -18px;
   right: 160px;
@@ -171,7 +179,7 @@ defineEmits<{
   border-bottom: 18px solid #000;
 }
 .tooltip-bubble a {
-  color: #60A5FA;
+  color: #60a5fa;
   text-decoration: underline;
 }
 @media (max-width: 820px) {

@@ -42,22 +42,28 @@
     </section>
 
     <!-- Hidden inputs -->
-    <input ref="empInput" type="file" class="sr-only" accept=".csv,text/csv" @change="onPicked($event, 'employees')" />
-    <input ref="staffInput" type="file" class="sr-only" accept=".csv,text/csv" @change="onPicked($event, 'staff')" />
-    <input ref="equipInput" type="file" class="sr-only" accept=".csv,text/csv" @change="onPicked($event, 'equipment')" />
-    <input ref="jobsInput" type="file" class="sr-only" accept=".csv,text/csv" @change="onPicked($event, 'jobs')" />
-    <input ref="tasksInput" type="file" class="sr-only" accept=".csv,text/csv" @change="onPicked($event, 'tasks')" />
-    <input ref="customersInput" type="file" class="sr-only" accept=".csv,text/csv" @change="onPicked($event, 'customers')" />
+    <input ref="empInput" type="file" class="hidden" accept=".csv,text/csv" @change="onPicked($event, 'employees')" />
+    <input ref="staffInput" type="file" class="hidden" accept=".csv,text/csv" @change="onPicked($event, 'staff')" />
+    <input ref="equipInput" type="file" class="hidden" accept=".csv,text/csv" @change="onPicked($event, 'equipment')" />
+    <input ref="jobsInput" type="file" class="hidden" accept=".csv,text/csv" @change="onPicked($event, 'jobs')" />
+    <input ref="tasksInput" type="file" class="hidden" accept=".csv,text/csv" @change="onPicked($event, 'tasks')" />
+    <input
+      ref="customersInput"
+      type="file"
+      class="hidden"
+      accept=".csv,text/csv"
+      @change="onPicked($event, 'customers')"
+    />
   </main>
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
-import ImportRow from '../components/imports/ImportRow.vue'
-import ImportConsole from '../components/imports/ImportConsole.vue'
-import { rows, type ImportRow as Row } from '../data/importRows'
-import { useUploader } from '../composables/useUploader'
-import { useImportState, type ImportKey } from '../composables/useImportState'
+import { ref, nextTick } from "vue"
+import ImportRow from "../components/imports/ImportRow.vue"
+import ImportConsole from "../components/imports/ImportConsole.vue"
+import { rows, type ImportRow as Row } from "../data/importRows"
+import { useUploader } from "../composables/useUploader"
+import { useImportState, type ImportKey } from "../composables/useImportState"
 
 // --- File input refs ---
 const empInput = ref<HTMLInputElement | null>(null)
@@ -92,23 +98,23 @@ function hideTooltip() {
 // Helpers from composable
 const { downloadTemplate, doUpload } = useUploader()
 
-function handleUploadClick(key: Row['key']) {
-  if (key === 'employees') empInput.value?.click()
-  else if (key === 'staff') staffInput.value?.click()
-  else if (key === 'equipment') equipInput.value?.click()
-  else if (key === 'jobs') jobsInput.value?.click()
-  else if (key === 'tasks') tasksInput.value?.click()
-  else if (key === 'customers') customersInput.value?.click()
+function handleUploadClick(key: Row["key"]) {
+  if (key === "employees") empInput.value?.click()
+  else if (key === "staff") staffInput.value?.click()
+  else if (key === "equipment") equipInput.value?.click()
+  else if (key === "jobs") jobsInput.value?.click()
+  else if (key === "tasks") tasksInput.value?.click()
+  else if (key === "customers") customersInput.value?.click()
 }
 
 // Map row key -> endpoint/label
 const endpointMap: Record<ImportKey, { endpoint: string; label: string; inputRef: any }> = {
-  employees: { endpoint: '/api/crew/employees', label: 'Employees & Foreman', inputRef: empInput },
-  staff:     { endpoint: '/api/crew/staff',     label: 'Staff',                inputRef: staffInput },
-  equipment: { endpoint: '/api/crew/equipment', label: 'Equipment',            inputRef: equipInput },
-  jobs:      { endpoint: '/api/crew/jobs',      label: 'Jobs',                 inputRef: jobsInput },
-  tasks:     { endpoint: '/api/crew/tasks',     label: 'Tasks',                inputRef: tasksInput },
-  customers: { endpoint: '/api/crew/customers', label: 'Customers',            inputRef: customersInput },
+  employees: { endpoint: "/api/crew/employees", label: "Employees & Foreman", inputRef: empInput },
+  staff: { endpoint: "/api/crew/staff", label: "Staff", inputRef: staffInput },
+  equipment: { endpoint: "/api/crew/equipment", label: "Equipment", inputRef: equipInput },
+  jobs: { endpoint: "/api/crew/jobs", label: "Jobs", inputRef: jobsInput },
+  tasks: { endpoint: "/api/crew/tasks", label: "Tasks", inputRef: tasksInput },
+  customers: { endpoint: "/api/crew/customers", label: "Customers", inputRef: customersInput },
 }
 
 async function onPicked(e: Event, key: ImportKey) {
@@ -126,10 +132,10 @@ async function onPicked(e: Event, key: ImportKey) {
     summaries[key].value = summaryLine
     errors[key].value = rowErrors
   } finally {
-    if (inputRef.value) inputRef.value.value = ''
+    if (inputRef.value) inputRef.value.value = ""
     uploading[key].value = false
     await nextTick()
-    document.querySelector('.board')?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    document.querySelector(".board")?.scrollIntoView({ behavior: "smooth", block: "end" })
   }
 }
 </script>
@@ -137,7 +143,7 @@ async function onPicked(e: Event, key: ImportKey) {
 <style scoped>
 .page {
   min-height: 100vh;
-  background: #EFF3F7;
+  background: #eff3f7;
   padding: 24px 16px;
 }
 .board {
@@ -145,7 +151,7 @@ async function onPicked(e: Event, key: ImportKey) {
   margin: 0 auto;
   background: #fff;
   border-radius: 26px;
-  border: 1px solid #E6E8EE;
+  border: 1px solid #e6e8ee;
   box-shadow: 0 6px 28px rgba(16, 24, 40, 0.08);
   padding: 16px 12px 20px;
 }
@@ -157,15 +163,11 @@ async function onPicked(e: Event, key: ImportKey) {
 }
 .col-title {
   text-align: center;
-  color: #5F6B7A;
+  color: #5f6b7a;
   font-weight: 700;
   font-size: 14px;
 }
-.sr-only {
-  position: absolute !important;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
+.hidden {
+  visibility: hidden;
 }
 </style>
