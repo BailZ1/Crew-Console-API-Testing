@@ -1,57 +1,42 @@
 <template>
-  <article class="row">
-    <h3 class="label" @mouseenter="$emit('show', item.key)" @mouseleave="$emit('hideDelayed', item.key)">
-      <span class="tooltip-wrap" style="font-family: sans-serif" tabindex="0">
+  <article
+    class="grid grid-cols-[1fr_auto_auto] md:grid-cols-[1fr_220px_200px] items-center gap-2.5 px-3.5 py-4 mx-1.5 my-2.5 rounded-2xl border border-slate-200 bg-white transition hover:border-slate-300 hover:shadow-[0_4px_18px_rgba(15,23,42,0.16)]"
+  >
+    <!-- Name + tooltip -->
+    <h3 class="m-0 text-[22px] leading-tight font-extrabold text-slate-800">
+      <HelpTooltip :lines="item.desc">
         {{ item.name }}
-        <span
-          class="tooltip-bubble"
-          :class="{ visible: visibleTooltip === item.key }"
-          role="tooltip"
-          @mouseenter="$emit('cancelHide')"
-          @mouseleave="$emit('hide')"
-        >
-          <template v-for="(line, i) in item.desc" :key="i">
-            <span>{{ line }}</span
-            ><br />
-          </template>
-          <a href="#" target="_blank" rel="noreferrer"> Watch here on how to fill out the .csv file. </a>
-        </span>
-      </span>
+      </HelpTooltip>
     </h3>
 
-    <!-- Download template -->
+    <!-- Download template (Material Symbols CSV icon) -->
     <button
-      class="icon-btn"
-      :class="{ disabled: !item.template }"
+      type="button"
+      class="justify-self-center inline-flex items-center justify-center w-14 h-14 rounded-full text-slate-900 cursor-pointer hover:bg-slate-100 disabled:opacity-45 disabled:cursor-not-allowed"
       aria-label="Download CSV template"
+      :disabled="!item.template"
+      :aria-disabled="!item.template"
       @click="item.template && $emit('download', item)"
     >
-      <svg viewBox="0 0 56 56" width="40" height="40" aria-hidden="true">
-        <rect x="10" y="12" width="36" height="44" rx="4" fill="#E7EEF7" stroke="#9CB3D2" stroke-width="2" />
-        <path d="M38 12v12h12" fill="#E7EEF7" stroke="#9CB3D2" stroke-width="2" />
-        <rect x="16" y="42" width="28" height="14" rx="6" :fill="item.template ? '#22C55E' : '#A3A3A3'" />
-        <text
-          x="30"
-          y="52"
-          text-anchor="middle"
-          font-size="11"
-          fill="white"
-          font-weight="700"
-          font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial"
-        >
-          CSV
-        </text>
-      </svg>
+      <!-- Material Symbols 'csv' icon -->
+      <span
+        class="material-symbols-outlined text-[32px] leading-none"
+        :class="item.template ? 'text-emerald-500' : 'text-neutral-400'"
+        aria-hidden="true"
+      >
+        csv
+      </span>
     </button>
 
     <!-- Upload CSV -->
     <button
-      class="icon-btn upload"
+      type="button"
+      class="justify-self-center inline-flex items-center justify-center w-14 h-14 rounded-full text-slate-900 cursor-pointer hover:bg-slate-100 disabled:opacity-45 disabled:cursor-not-allowed"
       :aria-label="`Upload CSV for ${item.name}`"
       @click="$emit('request-upload', item.key)"
       :disabled="disabled"
     >
-      <svg viewBox="0 0 64 64" width="48" height="48" aria-hidden="true">
+      <svg viewBox="0 0 64 64" width="32" height="32" aria-hidden="true" class="shrink-0">
         <path
           d="M22 30l10-12 10 12"
           fill="none"
@@ -62,7 +47,7 @@
         />
         <path d="M32 18v26" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" />
         <path
-          d="M14 44v6a6 6 0 006 6h24a6 6 0 006-6v-6"
+          d="M14 44v6a6 6 0 0 0 6 6h24a6 6 0 0 0 6-6v-6"
           fill="none"
           stroke="currentColor"
           stroke-width="4.5"
@@ -75,19 +60,15 @@
 </template>
 
 <script setup lang="ts">
+import HelpTooltip from "~/components/common/HelpTooltip.vue"
 import type { ImportRow as Row } from "~/data/importRows"
 
-const props = defineProps<{
+defineProps<{
   item: Row
   disabled?: boolean
-  visibleTooltip: string | null
 }>()
 
 defineEmits<{
-  (e: "show", key: Row["key"]): void
-  (e: "hideDelayed", key: Row["key"]): void
-  (e: "cancelHide"): void
-  (e: "hide"): void
   (e: "download", row: Row): void
   (e: "request-upload", key: Row["key"]): void
 }>()
@@ -122,11 +103,11 @@ defineEmits<{
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 56px;
+  width: 72px;
   height: 56px;
-  border-radius: 50%;
-  border: none;
-  background: transparent;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
   color: #0b1526;
   cursor: pointer;
 }

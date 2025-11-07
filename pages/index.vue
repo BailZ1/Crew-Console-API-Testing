@@ -1,12 +1,12 @@
 <!-- pages/index.vue -->
 <template>
-  <main class="page">
-    <section class="board">
+  <main class="min-h-screen bg-slate-100 px-4 py-6">
+    <section class="board mx-auto max-w-5xl rounded-[26px] border border-slate-200 bg-white px-3 pb-5 pt-4 shadow-lg">
       <!-- Header row -->
-      <header class="board-head">
+      <header class="grid grid-cols-[minmax(0,1fr)_220px_200px] items-center px-3 pt-1 pb-2">
         <div></div>
-        <div class="col-title">Download Template</div>
-        <div class="col-title">Upload .csv file</div>
+        <div class="text-center text-sm font-semibold text-slate-500">Download Template</div>
+        <div class="text-center text-sm font-semibold text-slate-500">Upload .csv file</div>
       </header>
 
       <!-- Rows -->
@@ -15,11 +15,6 @@
         :key="item.key"
         :item="item"
         :disabled="isUploading(item.key)"
-        :visibleTooltip="visibleTooltip"
-        @show="showTooltip"
-        @hideDelayed="hideTooltipDelayed"
-        @cancelHide="cancelHide"
-        @hide="hideTooltip"
         @download="downloadTemplate"
         @request-upload="handleUploadClick"
       />
@@ -41,17 +36,59 @@
       />
     </section>
 
-    <!-- Hidden inputs -->
-    <input ref="empInput" type="file" class="hidden" accept=".csv,text/csv" @change="onPicked($event, 'employees')" />
-    <input ref="staffInput" type="file" class="hidden" accept=".csv,text/csv" @change="onPicked($event, 'staff')" />
-    <input ref="equipInput" type="file" class="hidden" accept=".csv,text/csv" @change="onPicked($event, 'equipment')" />
-    <input ref="jobsInput" type="file" class="hidden" accept=".csv,text/csv" @change="onPicked($event, 'jobs')" />
-    <input ref="tasksInput" type="file" class="hidden" accept=".csv,text/csv" @change="onPicked($event, 'tasks')" />
+    <!-- Hidden file inputs (implementation detail only) -->
+    <input
+      ref="empInput"
+      type="file"
+      class="hidden"
+      accept=".csv,text/csv"
+      aria-hidden="true"
+      tabindex="-1"
+      @change="onPicked($event, 'employees')"
+    />
+    <input
+      ref="staffInput"
+      type="file"
+      class="hidden"
+      accept=".csv,text/csv"
+      aria-hidden="true"
+      tabindex="-1"
+      @change="onPicked($event, 'staff')"
+    />
+    <input
+      ref="equipInput"
+      type="file"
+      class="hidden"
+      accept=".csv,text/csv"
+      aria-hidden="true"
+      tabindex="-1"
+      @change="onPicked($event, 'equipment')"
+    />
+    <input
+      ref="jobsInput"
+      type="file"
+      class="hidden"
+      accept=".csv,text/csv"
+      aria-hidden="true"
+      tabindex="-1"
+      @change="onPicked($event, 'jobs')"
+    />
+    <input
+      ref="tasksInput"
+      type="file"
+      class="hidden"
+      accept=".csv,text/csv"
+      aria-hidden="true"
+      tabindex="-1"
+      @change="onPicked($event, 'tasks')"
+    />
     <input
       ref="customersInput"
       type="file"
       class="hidden"
       accept=".csv,text/csv"
+      aria-hidden="true"
+      tabindex="-1"
       @change="onPicked($event, 'customers')"
     />
   </main>
@@ -59,11 +96,11 @@
 
 <script setup lang="ts">
 import { ref, nextTick } from "vue"
-import ImportRow from "../components/imports/ImportRow.vue"
-import ImportConsole from "../components/imports/ImportConsole.vue"
-import { rows, type ImportRow as Row } from "../data/importRows"
-import { useUploader } from "../composables/useUploader"
-import { useImportState, type ImportKey } from "../composables/useImportState"
+import ImportRow from "~/components/imports/ImportRow.vue"
+import ImportConsole from "~/components/imports/ImportConsole.vue"
+import { rows, type ImportRow as Row } from "~/data/importRows"
+import { useUploader } from "~/composables/useUploader"
+import { useImportState, type ImportKey } from "~/composables/useImportState"
 
 // --- File input refs ---
 const empInput = ref<HTMLInputElement | null>(null)
@@ -75,25 +112,6 @@ const customersInput = ref<HTMLInputElement | null>(null)
 
 // 🔁 Centralized import state (summaries, errors, uploading)
 const { uploading, summaries, errors, isUploading, resetFor } = useImportState()
-
-// Tooltip state (single visible across rows)
-const visibleTooltip = ref<string | null>(null)
-let hideTimeout: any = null
-function showTooltip(key: string) {
-  clearTimeout(hideTimeout)
-  visibleTooltip.value = key
-}
-function hideTooltipDelayed(key: string) {
-  hideTimeout = setTimeout(() => {
-    if (visibleTooltip.value === key) visibleTooltip.value = null
-  }, 300)
-}
-function cancelHide() {
-  clearTimeout(hideTimeout)
-}
-function hideTooltip() {
-  visibleTooltip.value = null
-}
 
 // Helpers from composable
 const { downloadTemplate, doUpload } = useUploader()
@@ -109,12 +127,36 @@ function handleUploadClick(key: Row["key"]) {
 
 // Map row key -> endpoint/label
 const endpointMap: Record<ImportKey, { endpoint: string; label: string; inputRef: any }> = {
-  employees: { endpoint: "/api/crew/employees", label: "Employees & Foreman", inputRef: empInput },
-  staff: { endpoint: "/api/crew/staff", label: "Staff", inputRef: staffInput },
-  equipment: { endpoint: "/api/crew/equipment", label: "Equipment", inputRef: equipInput },
-  jobs: { endpoint: "/api/crew/jobs", label: "Jobs", inputRef: jobsInput },
-  tasks: { endpoint: "/api/crew/tasks", label: "Tasks", inputRef: tasksInput },
-  customers: { endpoint: "/api/crew/customers", label: "Customers", inputRef: customersInput },
+  employees: {
+    endpoint: "/api/crew/employees",
+    label: "Employees & Foreman",
+    inputRef: empInput,
+  },
+  staff: {
+    endpoint: "/api/crew/staff",
+    label: "Staff",
+    inputRef: staffInput,
+  },
+  equipment: {
+    endpoint: "/api/crew/equipment",
+    label: "Equipment",
+    inputRef: equipInput,
+  },
+  jobs: {
+    endpoint: "/api/crew/jobs",
+    label: "Jobs",
+    inputRef: jobsInput,
+  },
+  tasks: {
+    endpoint: "/api/crew/tasks",
+    label: "Tasks",
+    inputRef: tasksInput,
+  },
+  customers: {
+    endpoint: "/api/crew/customers",
+    label: "Customers",
+    inputRef: customersInput,
+  },
 }
 
 async function onPicked(e: Event, key: ImportKey) {
@@ -140,34 +182,4 @@ async function onPicked(e: Event, key: ImportKey) {
 }
 </script>
 
-<style scoped>
-.page {
-  min-height: 100vh;
-  background: #eff3f7;
-  padding: 24px 16px;
-}
-.board {
-  max-width: 1000px;
-  margin: 0 auto;
-  background: #fff;
-  border-radius: 26px;
-  border: 1px solid #e6e8ee;
-  box-shadow: 0 6px 28px rgba(16, 24, 40, 0.08);
-  padding: 16px 12px 20px;
-}
-.board-head {
-  display: grid;
-  grid-template-columns: 1fr 220px 200px;
-  align-items: center;
-  padding: 6px 12px 10px;
-}
-.col-title {
-  text-align: center;
-  color: #5f6b7a;
-  font-weight: 700;
-  font-size: 14px;
-}
-.hidden {
-  visibility: hidden;
-}
-</style>
+<!-- No <style scoped> needed; all layout done via Tailwind utilities -->

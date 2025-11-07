@@ -1,5 +1,8 @@
 <template>
-  <div class="console-wrap">
+  <div
+    class="mt-2 mx-1.5 text-sm text-slate-600 space-y-1.5"
+  >
+    <!-- Summaries -->
     <p v-if="empSummary">Employees &amp; Foreman — {{ empSummary }}</p>
     <p v-if="staffSummary">Staff — {{ staffSummary }}</p>
     <p v-if="equipSummary">Equipment — {{ equipSummary }}</p>
@@ -7,10 +10,19 @@
     <p v-if="tasksSummary">Tasks — {{ tasksSummary }}</p>
     <p v-if="customersSummary">Customers — {{ customersSummary }}</p>
 
-    <div v-if="hasErrors" class="errors">
-      <p><strong>Errors found while importing:</strong></p>
-      <ul>
-        <li v-for="(err, i) in allErrors" :key="i">
+    <!-- Errors -->
+    <div
+      v-if="hasErrors"
+      class="mt-1.5 ml-4 text-xs text-red-700"
+    >
+      <p>
+        <strong>Errors found while importing:</strong>
+      </p>
+      <ul class="mt-0.5 list-disc ml-5">
+        <li
+          v-for="(err, i) in allErrors"
+          :key="i"
+        >
           {{ err.error }}
         </li>
       </ul>
@@ -49,22 +61,3 @@ const allErrors = computed(() => [
 
 const hasErrors = computed(() => allErrors.value.length > 0)
 </script>
-
-<style scoped>
-.console-wrap {
-  margin: 8px 6px 0;
-  color: #475569;
-  font-size: 14px;
-}
-.errors {
-  margin-left: 18px;
-  margin-top: 6px;
-  color: #b91c1c;
-  font-size: 13px;
-}
-.errors ul {
-  margin-top: 2px;
-  list-style-type: disc;
-  margin-left: 18px;
-}
-</style>
