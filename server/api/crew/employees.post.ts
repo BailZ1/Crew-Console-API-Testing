@@ -1,5 +1,10 @@
 // server/api/crew/users/employees.post.ts
-import { defineEventHandler, readMultipartFormData, readBody, createError } from 'h3'
+import {
+  defineEventHandler,
+  readMultipartFormData,
+  readBody,
+  createError
+} from 'h3'
 import { parse } from 'csv-parse/sync'
 import { createCrewClient } from '~/utils/crewClient'
 
@@ -45,35 +50,64 @@ export default defineEventHandler(async (event) => {
     lineNumber++
 
     // Normalize and check required fields
-    const name = (r['Name First and Last'] ?? r['Name'] ?? r.name)?.toString().trim()
+    const name = (r['Name First and Last'] ?? r['Name'] ?? r.name)
+      ?.toString()
+      .trim()
     const pin = (r.PIN ?? r['Pin'] ?? r['pin'])?.toString().trim()
 
     if (!name || !pin) {
       results.push({
         ok: false,
-        error: `Missing required field(s):${!name ? ' Name' : ''}${!pin ? ' PIN' : ''} on line ${lineNumber}`,
+        error: `Missing required field(s):${!name ? ' Name' : ''}${
+          !pin ? ' PIN' : ''
+        } on line ${lineNumber}`,
+        row: r
+      })
+      continue
+    }
+
+    // ✅ PIN must be exactly 4 numeric digits (no letters, no shorter/longer)
+    if (!/^\d{4}$/.test(pin)) {
+      results.push({
+        ok: false,
+        error: `Invalid PIN on line ${lineNumber}: must be exactly 4 digits (0–9)`,
         row: r
       })
       continue
     }
 
     // Normalize optional fields — convert blanks to null
-    const employee_id = r['Employee ID'] ? String(r['Employee ID']).trim() : null
-    const email = r.Email && String(r.Email).trim() !== '' ? String(r.Email).trim() : null
-    const role = r.Role && String(r.Role).trim() !== '' ? String(r.Role).trim() : 'user'
+    const employee_id = r['Employee ID']
+      ? String(r['Employee ID']).trim()
+      : null
+    const email =
+      r.Email && String(r.Email).trim() !== ''
+        ? String(r.Email).trim()
+        : null
+    const role =
+      r.Role && String(r.Role).trim() !== ''
+        ? String(r.Role).trim()
+        : 'user'
+
     // Allow per-row override; otherwise use resolved company_id
     const company_id = (() => {
       const raw = r['Company ID']
-      if (raw === undefined || raw === null || String(raw).trim() === '') return resolvedCompanyId
+      if (
+        raw === undefined ||
+        raw === null ||
+        String(raw).trim() === ''
+      )
+        return resolvedCompanyId
       const n = Number(String(raw).trim())
       return Number.isNaN(n) ? resolvedCompanyId : n
     })()
+
     const foreman =
       r.Foreman && String(r.Foreman).toLowerCase().includes('true') ? 1 : 0
 
     const payload = {
       name,
-      pin,
+      pin, // stays as a string so leading zeros are preserved
       employee_id,
       email,
       company_id,
@@ -104,7 +138,11 @@ export default defineEventHandler(async (event) => {
   // --- 4️⃣ Return summary ---
   const ok = results.filter((r) => r.ok).length
   const failed = results.length - ok
-  const validationErrors = results.filter((r) => !r.ok && String(r.error || '').includes('Missing'))
+
+  // Treat missing fields and invalid PINs as "validationErrors"
+  const validationErrors = results.filter((r) =>
+    String(r.error || '').match(/Missing|required|Invalid PIN/i)
+  )
 
   return {
     summary: {

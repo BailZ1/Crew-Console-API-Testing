@@ -15,15 +15,22 @@ interface PostResult {
 }
 
 /**
- * Expected CSV headers (exact):
- * - Name First and Last (required)  -> name
- * - Email (required)                -> email
- * - Password (required)             -> password
- * - Employee ID (optional)          -> accounting_id
- * - Payroll (optional)              -> time_clock_level (0/1 or number)
- * - Jobs (optional)                 -> scheduler_level (0/1 or number)
- * - Users (optional)                -> role: 'admin' if truthy, else 'user'
- * - Analysis (optional)             -> metrics_level (0/1 or number); metrics_enabled derived
+ * Expected CSV headers (exact) — plus some flexible aliases:
+ *
+ * Required:
+ *  - Name First and Last       -> name
+ *  - Email                     -> email
+ *  - Password                  -> password  (>= 6 chars)
+ *
+ * Optional (primary names + aliases):
+ *  - Employee ID / ID / Staff ID        -> accounting_id  (staff ID column)
+ *  - Phone Number / Phone / Mobile      -> phone
+ *  - Payroll / Time Clock               -> time_clock_level
+ *  - Jobs / Scheduler                   -> scheduler_level
+ *  - Users / Admin                      -> (ignored for role; we always create regular staff)
+ *  - Analysis / Metrics / Reports       -> metrics_level (+ metrics_enabled)
+ *
+ * Any of those permission columns can use: Y, Yes, true, 1, x (case-insensitive)
  */
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ rows: CsvRow[] }>(event)
@@ -73,14 +80,37 @@ export default defineEventHandler(async (event) => {
   const parseYes = (v: any): boolean => {
     if (v == null) return false
     const s = v.toString().trim().toLowerCase()
-    return s === 'yes' || s === 'y' || s === 'true' || s === '1' || s === 'x'
+    return (
+      s === 'yes' ||
+      s === 'y' ||
+      s === 'true' ||
+      s === '1' ||
+      s === 'x'
+    )
   }
+
   const parseLevel = (v: any): number => {
     if (v == null || v === '') return 0
     const s = v.toString().trim()
     const num = Number(s)
     if (!Number.isNaN(num)) return Math.max(0, Math.floor(num))
     return parseYes(s) ? 1 : 0
+  }
+
+  /**
+   * Case-insensitive, whitespace-tolerant lookup for a value
+   * from one of several possible column names.
+   */
+  const getFromColumns = (row: CsvRow, keys: string[]): string => {
+    const entries = Object.entries(row)
+    for (const wanted of keys) {
+      const wantedNorm = wanted.toLowerCase().trim()
+      const match = entries.find(([k]) => k.toLowerCase().trim() === wantedNorm)
+      if (match && match[1] != null && match[1] !== '') {
+        return match[1].toString().trim()
+      }
+    }
+    return ''
   }
 
   const results: PostResult[] = []
@@ -117,6 +147,19 @@ export default defineEventHandler(async (event) => {
       continue
     }
 
+    // 🔒 Password minimum length: 6 characters
+    if (password.length < 6) {
+      validationErrors++
+      failed++
+      results.push({
+        ok: false,
+        error: `Password must be at least 6 characters on line ${i + 2}`,
+        row: r,
+        index: i
+      })
+      continue
+    }
+
     // --- Skip duplicate emails in same upload ---
     const emailKey = email.toLowerCase()
     if (seenEmails.has(emailKey)) {
@@ -136,7 +179,11 @@ export default defineEventHandler(async (event) => {
       failed++
       results.push({
         ok: false,
-        error: `Duplicate email: "${email}" already exists in the system${existing?.name ? ` (belongs to ${existing.name}${existing?.id ? ` #${existing.id}` : ''})` : ''}. Skipped row ${i + 2}.`,
+        error: `Duplicate email: "${email}" already exists in the system${
+          existing?.name
+            ? ` (belongs to ${existing.name}${existing?.id ? ` #${existing.id}` : ''})`
+            : ''
+        }. Skipped row ${i + 2}.`,
         row: r,
         index: i
       })
@@ -146,29 +193,55 @@ export default defineEventHandler(async (event) => {
     // Mark as seen to prevent duplicates later in the same upload
     seenEmails.add(emailKey)
 
-    // --- Optional mappings ---
-    const accounting_id = (r['Employee ID'] ?? '').toString().trim() || null
-    const time_clock_level = parseLevel(r['Payroll'])
-    const scheduler_level = parseLevel(r['Jobs'])
-    const metrics_level = parseLevel(r['Analysis'])
+    // --- Optional mappings (more robust header support) ---
+    // Staff “ID” column → accounting_id (we *don’t* link to employee_id)
+    const accounting_id =
+      getFromColumns(r, ['Employee ID', 'ID', 'Staff ID']) || null
+
+    const phone =
+      getFromColumns(r, ['Phone Number', 'Phone', 'Mobile']) || null
+
+    const time_clock_level = parseLevel(
+      getFromColumns(r, ['Payroll', 'Time Clock', 'TimeClock'])
+    )
+    const scheduler_level = parseLevel(
+      getFromColumns(r, ['Jobs', 'Scheduler', 'Scheduling'])
+    )
+    const metrics_level = parseLevel(
+      getFromColumns(r, ['Analysis', 'Metrics', 'Reports'])
+    )
     const metrics_enabled = metrics_level > 0 ? 1 : 0
-    const role = parseYes(r['Users']) ? 'admin' : 'user'
+
+    // ❗️IMPORTANT: We ALWAYS create regular staff (never admin/super admin)
+    const role = 'user'
 
     // --- Build API payload for /api/users ---
     const payload: any = {
       name,
       email,
       password,
-      role,               // 'admin' if "Users" truthy, else 'user'
+
+      // Permissions / role
+      role,               // ALWAYS 'user' for imported staff
       employee: 0,        // mark as "staff" (not an Employee)
       active: 1,
       time_clock_level,
       scheduler_level,
       metrics_level,
       metrics_enabled,
-      accounting_id,
+
+      // Identification / linkage
+      accounting_id,      // this is what drives the staff "ID" column
       employee_id: null,  // do not link to an Employee row
-      company_id: resolvedCompanyId
+      company_id: resolvedCompanyId,
+
+      // Explicitly regular staff, never super admin
+      type: 'user',
+      is_super_admin: 0
+    }
+
+    if (phone) {
+      payload.phone = phone
     }
 
     try {
