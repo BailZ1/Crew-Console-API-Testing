@@ -15,7 +15,7 @@ export default defineEventHandler(async (event) => {
 
   let rows: CsvRow[] = []
 
-  // 1) Accept CSV upload (multipart) or JSON { rows }
+  // Accept CSV upload (multipart) or JSON { rows }
   const form = await readMultipartFormData(event)
   const csvFile = form?.find(
     (f) => f.filename?.toLowerCase().endsWith('.csv') || f.type?.includes('csv')
@@ -33,7 +33,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'CSV file is required' })
   }
 
-  // 2) Resolve default company_id once
+  // Resolve default company_id once
   let resolvedCompanyId: number | null = null
   try {
     resolvedCompanyId = await client.resolveCompanyId()
@@ -44,22 +44,23 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // --- Your exact headers (primary) + a couple safe aliases as fallback ---
+  // Your sheet headers (+ robust matching)
   const NAME_HEADERS = ['Name First and Last', 'Name']
   const PIN_HEADERS = ['Pin (4 digits or more)', 'PIN', 'Pin']
   const EMP_ID_HEADERS = ['Employee ID', 'ID']
   const PHONE_HEADERS = ['Cell Number', 'Cell Phone', 'Phone Number', 'Phone']
   const FOREMAN_HEADERS = ['Foreman']
-  const TRACKING_HEADERS = ['Tracking'] // maps to time_clock_level
+  const TRACKING_HEADERS = ['Tracking'] // controls the "Tracking" toggle
 
-  // Helper: normalize keys lightly to survive minor punctuation/spacing changes
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
   const getFromColumns = (row: CsvRow, candidates: string[]): string => {
     const keyMap = new Map<string, string>()
     for (const k of Object.keys(row || {})) keyMap.set(norm(k), k)
     for (const c of candidates) {
       const hit = keyMap.get(norm(c))
-      if (hit && row[hit] != null && row[hit] !== '') return String(row[hit]).trim()
+      if (hit != null && row[hit] != null && row[hit] !== '') {
+        return String(row[hit]).trim()
+      }
     }
     return ''
   }
@@ -67,7 +68,8 @@ export default defineEventHandler(async (event) => {
   const parseYes = (v: any): boolean => {
     if (v == null) return false
     const s = v.toString().trim().toLowerCase()
-    return s === 'yes' || s === 'y' || s === 'true' || s === '1' || s === 'x'
+    // Accept Y/Yes/True/1/X/On/✓ etc.
+    return ['y', 'yes', 'true', '1', 'x', 'on', '✓', 'check', 'checked'].includes(s)
   }
 
   const normalizePhone = (raw?: string | null) => {
@@ -89,21 +91,20 @@ export default defineEventHandler(async (event) => {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
   }
 
-  // 3) Validate + POST each row
+  // Validate + POST each row
   const results: any[] = []
   let lineNumber = 1
 
   for (const r of rows) {
     lineNumber++
 
-    // Required fields (using your exact headers)
+    // Required: Name + Pin (exactly 4 digits)
     const name = getFromColumns(r, NAME_HEADERS)
-    const pin = getFromColumns(r, PIN_HEADERS)
-
-    if (!name || !pin) {
+    const pinRaw = getFromColumns(r, PIN_HEADERS)
+    if (!name || !pinRaw) {
       const missing: string[] = []
       if (!name) missing.push('Name First and Last')
-      if (!pin) missing.push('Pin (4 digits or more)')
+      if (!pinRaw) missing.push('Pin (4 digits or more)')
       results.push({
         ok: false,
         error: `Missing required field(s): ${missing.join(', ')} on line ${lineNumber}`,
@@ -111,9 +112,7 @@ export default defineEventHandler(async (event) => {
       })
       continue
     }
-
-    // Strict: exactly 4 numeric digits
-    if (!/^\d{4}$/.test(pin)) {
+    if (!/^\d{4}$/.test(pinRaw)) {
       results.push({
         ok: false,
         error: `Invalid PIN on line ${lineNumber}: must be exactly 4 digits (0–9)`,
@@ -126,22 +125,25 @@ export default defineEventHandler(async (event) => {
     const employee_id = getFromColumns(r, EMP_ID_HEADERS) || null
     const phoneRaw = getFromColumns(r, PHONE_HEADERS) || null
     const phoneNorm = phoneRaw ? normalizePhone(phoneRaw) : null
+
+    // 🔴 Toggles from CSV:
+    // Foreman: Y => 1 else 0  |  Tracking: Y => time_clock_level=1 else 0
     const foreman = parseYes(getFromColumns(r, FOREMAN_HEADERS)) ? 1 : 0
     const time_clock_level = parseYes(getFromColumns(r, TRACKING_HEADERS)) ? 1 : 0
 
-    // Employees should never be created as admins here; force a safe role.
+    // Always regular user for this importer
     const role = 'user'
 
     const payload: any = {
       name,
-      pin,                    // string → preserves leading zeros
-      employee_id,            // ← from "Employee ID"
+      pin: pinRaw,                 // keep as string to preserve leading zeros
+      employee_id,                 // ← from "Employee ID"
       company_id: resolvedCompanyId,
-      role,                   // force regular user
-      employee: 1,            // mark as employee
+      role,                        // never admin here
+      employee: 1,                 // marks as Employee (not Staff)
       active: 1,
-      foreman,                // ← from "Foreman"
-      time_clock_level        // ← from "Tracking" (Y/Yes/true/1/x => 1)
+      foreman,                     // ← drives Foreman toggle
+      time_clock_level             // ← drives Tracking toggle
     }
 
     if (phoneNorm) {
@@ -168,7 +170,7 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // 4) Summary
+  // Summary
   const ok = results.filter((r) => r.ok).length
   const failed = results.length - ok
   const validationErrors = results.filter((r) =>

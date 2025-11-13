@@ -14,45 +14,49 @@ interface PostResult {
   skippedReason?: string
 }
 
-/**
- * Expected CSV headers (exact) — plus some flexible aliases:
- *
- * Required:
- *  - Name First and Last       -> name
- *  - Email                     -> email
- *  - Password                  -> password  (>= 6 chars)
- *
- * Optional (primary names + aliases):
- *  - Employee ID / ID / Staff ID        -> accounting_id  (staff ID column)
- *  - Phone Number / Phone / Mobile      -> phone
- *  - Payroll / Time Clock               -> time_clock_level
- *  - Jobs / Scheduler                   -> scheduler_level
- *  - Users / Admin                      -> (ignored for role; we always create regular staff)
- *  - Analysis / Metrics / Reports       -> metrics_level (+ metrics_enabled)
- *
- * Any of those permission columns can use: Y, Yes, true, 1, x (case-insensitive)
- */
+// Exact headers for this template
+const H = {
+  NAME: 'Name First and Last',
+  EMP_ID: 'Employee ID',
+  EMAIL: 'Email',
+  PASSWORD: 'Password (6 Characters minimum)',
+  PHONE: 'Cell Phone',
+  PAYROLL: 'Payroll',
+  JOBS: 'Jobs',
+  USERS: 'Users',      // ignored for role; we always create regular staff
+  ANALYSIS: 'Analysis'
+} as const
+
+// Case-insensitive, whitespace-tolerant lookup that returns the raw cell value
+const getExact = (row: Record<string, any>, header: string) => {
+  const wanted = header.toLowerCase().trim()
+  for (const [k, v] of Object.entries(row)) {
+    if (k.toLowerCase().trim() === wanted) return v == null ? '' : String(v)
+  }
+  return ''
+}
+
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ rows: CsvRow[] }>(event)
   if (!body?.rows?.length) {
     throw createError({ statusCode: 400, statusMessage: 'rows[] required' })
   }
 
-  // Ensure the required headers exist on first row (defensive)
+  // Validate required headers exist on first row
   const first = body.rows[0] || {}
-  for (const h of ['Name First and Last', 'Email', 'Password']) {
-    if (!Object.prototype.hasOwnProperty.call(first, h)) {
+  for (const required of [H.NAME, H.EMAIL, H.PASSWORD]) {
+    if (!Object.prototype.hasOwnProperty.call(first, required)) {
       throw createError({
         statusCode: 400,
-        statusMessage: `CSV must include a column named "${h}".`
+        statusMessage: `CSV must include a column named "${required}".`
       })
     }
   }
 
-  // 🔁 Centralized Crew API client
+  // Crew API client
   const client = createCrewClient()
 
-  // 🔎 Resolve company_id once from /api/users
+  // Resolve company_id once
   let resolvedCompanyId: number
   try {
     resolvedCompanyId = await client.resolveCompanyId()
@@ -63,7 +67,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // 🔍 Preload existing users' emails → prevent server-side duplicate errors
+  // Preload existing users → prevent duplicate email creates
   const existingEmailMap = new Map<string, { id?: number; name?: string }>()
   try {
     const users: any = await client.get('/api/users')
@@ -72,184 +76,145 @@ export default defineEventHandler(async (event) => {
       const e = (u?.email ?? '').toString().trim().toLowerCase()
       if (e) existingEmailMap.set(e, { id: u?.id, name: u?.name })
     }
-  } catch {
-    // If this fails, we still proceed; backend duplicate catch below will handle it
-  }
+  } catch { /* best effort; server will still enforce unique */ }
 
   // Helpers
   const parseYes = (v: any): boolean => {
     if (v == null) return false
     const s = v.toString().trim().toLowerCase()
-    return (
-      s === 'yes' ||
-      s === 'y' ||
-      s === 'true' ||
-      s === '1' ||
-      s === 'x'
-    )
+    return ['y','yes','true','1','x','on','✓','check','checked'].includes(s)
   }
 
-  const parseLevel = (v: any): number => {
-    if (v == null || v === '') return 0
-    const s = v.toString().trim()
-    const num = Number(s)
-    if (!Number.isNaN(num)) return Math.max(0, Math.floor(num))
-    return parseYes(s) ? 1 : 0
-  }
-
-  /**
-   * Case-insensitive, whitespace-tolerant lookup for a value
-   * from one of several possible column names.
-   */
-  const getFromColumns = (row: CsvRow, keys: string[]): string => {
-    const entries = Object.entries(row)
-    for (const wanted of keys) {
-      const wantedNorm = wanted.toLowerCase().trim()
-      const match = entries.find(([k]) => k.toLowerCase().trim() === wantedNorm)
-      if (match && match[1] != null && match[1] !== '') {
-        return match[1].toString().trim()
-      }
+  const normalizePhone = (raw?: string | null) => {
+    if (!raw) return null
+    const s = String(raw).trim()
+    if (/^\+\d{8,15}$/.test(s)) {
+      const cc = (s.match(/^\+(\d{1,3})/) || [])[1] || null
+      return { e164: s, cc }
     }
-    return ''
+    const digits = s.replace(/\D+/g, '')
+    if (digits.length === 10) return { e164: `+1${digits}`, cc: '1' as const }
+    if (digits.length === 11 && digits.startsWith('1')) return { e164: `+${digits}`, cc: '1' as const }
+    return { e164: s, cc: null as string | null }
+  }
+
+  const nowSql = (): string => {
+    const d = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
   }
 
   const results: PostResult[] = []
-  let ok = 0
-  let failed = 0
-  let validationErrors = 0
-  let skippedDuplicates = 0
-
-  // De-dupe inside the same CSV upload
+  let ok = 0, failed = 0, validationErrors = 0, skippedDuplicates = 0
   const seenEmails = new Set<string>()
 
   for (let i = 0; i < body.rows.length; i++) {
     const r = body.rows[i] || {}
 
-    // --- Extract required fields ---
-    const name = (r['Name First and Last'] ?? '').toString().trim()
-    const email = (r['Email'] ?? '').toString().trim()
-    const password = (r['Password'] ?? '').toString().trim()
+    // Required fields (read, then TRIM for validation + submission)
+    const name = (getExact(r, H.NAME) || '').trim()
+    const email = (getExact(r, H.EMAIL) || '').trim()
+    const passwordTrimmed = (getExact(r, H.PASSWORD) || '').trim()
 
     const missing: string[] = []
-    if (!name) missing.push('Name First and Last')
-    if (!email) missing.push('Email')
-    if (!password) missing.push('Password')
-
+    if (!name) missing.push(H.NAME)
+    if (!email) missing.push(H.EMAIL)
+    if (!passwordTrimmed) missing.push(H.PASSWORD)
     if (missing.length) {
-      validationErrors++
-      failed++
+      validationErrors++; failed++
       results.push({
         ok: false,
         error: `Missing required field(s): ${missing.join(', ')} on line ${i + 2}`,
-        row: r,
-        index: i
+        row: r, index: i
       })
       continue
     }
 
-    // 🔒 Password minimum length: 6 characters
-    if (password.length < 6) {
-      validationErrors++
-      failed++
+    // Password >= 6 characters (use trimmed version)
+    if (passwordTrimmed.length < 6) {
+      validationErrors++; failed++
       results.push({
         ok: false,
         error: `Password must be at least 6 characters on line ${i + 2}`,
-        row: r,
-        index: i
+        row: r, index: i
       })
       continue
     }
 
-    // --- Skip duplicate emails in same upload ---
+    // De-dupe within this upload
     const emailKey = email.toLowerCase()
     if (seenEmails.has(emailKey)) {
       skippedDuplicates++
-      results.push({
-        ok: false,
-        skippedReason: 'Duplicate email in upload',
-        row: r,
-        index: i
-      })
+      results.push({ ok: false, skippedReason: 'Duplicate email in upload', row: r, index: i })
       continue
     }
 
-    // --- Skip if email already exists on the server (pre-check) ---
+    // Skip if already exists on server
     if (existingEmailMap.has(emailKey)) {
       const existing = existingEmailMap.get(emailKey)
       failed++
       results.push({
         ok: false,
-        error: `Duplicate email: "${email}" already exists in the system${
-          existing?.name
-            ? ` (belongs to ${existing.name}${existing?.id ? ` #${existing.id}` : ''})`
-            : ''
-        }. Skipped row ${i + 2}.`,
-        row: r,
-        index: i
+        error: `Duplicate email: "${email}" already exists in the system${existing?.name ? ` (belongs to ${existing.name}${existing?.id ? ` #${existing.id}` : ''})` : ''}. Skipped row ${i + 2}.`,
+        row: r, index: i
       })
       continue
     }
 
-    // Mark as seen to prevent duplicates later in the same upload
     seenEmails.add(emailKey)
 
-    // --- Optional mappings (more robust header support) ---
-    // Staff “ID” column → accounting_id (we *don’t* link to employee_id)
-    const accounting_id =
-      getFromColumns(r, ['Employee ID', 'ID', 'Staff ID']) || null
+    // Optional columns (exact names)
+    const employeeIdRaw = (getExact(r, H.EMP_ID) || '').trim() || null
+    const phoneRaw = (getExact(r, H.PHONE) || '').trim() || null
 
-    const phone =
-      getFromColumns(r, ['Phone Number', 'Phone', 'Mobile']) || null
-
-    const time_clock_level = parseLevel(
-      getFromColumns(r, ['Payroll', 'Time Clock', 'TimeClock'])
-    )
-    const scheduler_level = parseLevel(
-      getFromColumns(r, ['Jobs', 'Scheduler', 'Scheduling'])
-    )
-    const metrics_level = parseLevel(
-      getFromColumns(r, ['Analysis', 'Metrics', 'Reports'])
-    )
+    const time_clock_level = parseYes(r[H.PAYROLL]) ? 1 : 0
+    const scheduler_level = parseYes(r[H.JOBS]) ? 1 : 0
+    const metrics_level   = parseYes(r[H.ANALYSIS]) ? 1 : 0
     const metrics_enabled = metrics_level > 0 ? 1 : 0
 
-    // ❗️IMPORTANT: We ALWAYS create regular staff (never admin/super admin)
+    // Always create regular staff (never admin)
     const role = 'user'
 
-    // --- Build API payload for /api/users ---
     const payload: any = {
       name,
       email,
-      password,
+
+      // send the TRIMMED value (most backends trim before validating anyway)
+      password: passwordTrimmed,
+      password_confirmation: passwordTrimmed,
 
       // Permissions / role
-      role,               // ALWAYS 'user' for imported staff
-      employee: 0,        // mark as "staff" (not an Employee)
+      role,               // regular staff
+      employee: 0,
       active: 1,
       time_clock_level,
       scheduler_level,
       metrics_level,
       metrics_enabled,
 
-      // Identification / linkage
-      accounting_id,      // this is what drives the staff "ID" column
-      employee_id: null,  // do not link to an Employee row
+      // IDs (mirror into both fields so UI filters work)
+      accounting_id: employeeIdRaw,
+      employee_id: employeeIdRaw,
+
       company_id: resolvedCompanyId,
 
-      // Explicitly regular staff, never super admin
+      // Guardrails
       type: 'user',
       is_super_admin: 0
     }
 
-    if (phone) {
-      payload.phone = phone
+    if (phoneRaw) {
+      const norm = normalizePhone(phoneRaw)
+      payload.phone = norm?.e164 ?? phoneRaw
+      payload.phone_number = norm?.e164 ?? phoneRaw
+      if (norm?.cc) payload.phone_country_code = norm.cc
+      payload.consented_to_sms_at = nowSql()
     }
 
     try {
       const res = await client.post('/api/users', payload)
       results.push({ ok: true, res, index: i })
       ok++
-
-      // Also add to existingEmailMap so later rows detect it
       existingEmailMap.set(emailKey, { name, id: res?.data?.id ?? res?.id })
     } catch (err: any) {
       const status = err?.response?.status
@@ -260,7 +225,6 @@ export default defineEventHandler(async (event) => {
         err?.message ||
         'Request failed'
 
-      // Friendly duplicate mapping for MySQL unique constraint
       const isDup =
         /duplicate entry '.*' for key 'users\.users_email_unique'/i.test(rawMsg) ||
         /duplicate entry/i.test(rawMsg)
@@ -269,13 +233,7 @@ export default defineEventHandler(async (event) => {
         ? `Duplicate email: "${email}" already exists in the system. Skipped row ${i + 2}.`
         : (status ? `HTTP ${status}: ${rawMsg}` : rawMsg)
 
-      results.push({
-        ok: false,
-        error: msg,
-        payload,
-        row: r,
-        index: i
-      })
+      results.push({ ok: false, error: msg, payload, row: r, index: i })
       failed++
     }
   }
