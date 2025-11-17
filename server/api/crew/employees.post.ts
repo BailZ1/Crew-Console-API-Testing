@@ -126,10 +126,33 @@ export default defineEventHandler(async (event) => {
     const phoneRaw = getFromColumns(r, PHONE_HEADERS) || null
     const phoneNorm = phoneRaw ? normalizePhone(phoneRaw) : null
 
-    // 🔴 Toggles from CSV:
-    // Foreman: Y => 1 else 0  |  Tracking: Y => time_clock_level=1 else 0
-    const foreman = parseYes(getFromColumns(r, FOREMAN_HEADERS)) ? 1 : 0
-    const time_clock_level = parseYes(getFromColumns(r, TRACKING_HEADERS)) ? 1 : 0
+    // 🔴 Toggles from CSV (Foreman / Tracking columns)
+    // These drive the Permissions model (time_for_others, tracking_info).
+    const foremanFlag = parseYes(getFromColumns(r, FOREMAN_HEADERS))
+    const trackingFlag = parseYes(getFromColumns(r, TRACKING_HEADERS))
+
+    // Keep numeric fields for compatibility
+    const foreman = foremanFlag ? 1 : 0
+    const time_clock_level = trackingFlag ? 1 : 0
+
+    // Build permissions array for this employee
+    const permissions: any[] = []
+
+    // Tracking toggle -> tracking_info permission
+    if (trackingFlag) {
+      permissions.push({
+        name: 'tracking_info',
+        pivot: { value: 'edit' }
+      })
+    }
+
+    // Foreman toggle -> time_for_others permission
+    if (foremanFlag) {
+      permissions.push({
+        name: 'time_for_others',
+        pivot: { value: 'edit' }
+      })
+    }
 
     // Always regular user for this importer
     const role = 'user'
@@ -142,8 +165,13 @@ export default defineEventHandler(async (event) => {
       role,                        // never admin here
       employee: 1,                 // marks as Employee (not Staff)
       active: 1,
-      foreman,                     // ← drives Foreman toggle
-      time_clock_level             // ← drives Tracking toggle
+      foreman,                     // numeric mirror
+      time_clock_level             // numeric mirror
+    }
+
+    // Attach permissions only if any were set
+    if (permissions.length) {
+      payload.permissions = permissions
     }
 
     if (phoneNorm) {
