@@ -49,8 +49,8 @@ export default defineEventHandler(async (event) => {
   const PIN_HEADERS = ['Pin (4 digits or more)', 'PIN', 'Pin']
   const EMP_ID_HEADERS = ['Employee ID', 'ID']
   const PHONE_HEADERS = ['Cell Number', 'Cell Phone', 'Phone Number', 'Phone']
-  const FOREMAN_HEADERS = ['Foreman']
-  const TRACKING_HEADERS = ['Tracking'] // controls the "Tracking" toggle
+  const FOREMAN_HEADERS = ['Foreman']   // => permissions.time_for_others
+  const TRACKING_HEADERS = ['Tracking'] // => permissions.tracking_info
 
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
   const getFromColumns = (row: CsvRow, candidates: string[]): string => {
@@ -91,6 +91,27 @@ export default defineEventHandler(async (event) => {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
   }
 
+  // Best-effort permission setter with multiple fallbacks
+  const setPermissions = async (userId: number, perms: { time_for_others: number; tracking_info: number }) => {
+    // 1) Try dedicated permissions endpoint
+    try {
+      await client.post('/api/permissions', { user_id: userId, ...perms })
+      return
+    } catch (_) { /* fall through */ }
+
+    // 2) Try users/:id/permissions
+    try {
+      await client.put(`/api/users/${userId}/permissions`, perms)
+      return
+    } catch (_) { /* fall through */ }
+
+    // 3) Try patching user with a nested permissions object
+    try {
+      await client.patch(`/api/users/${userId}`, { permissions: perms })
+      return
+    } catch (_) { /* swallow – non-fatal to the import */ }
+  }
+
   // Validate + POST each row
   const results: any[] = []
   let lineNumber = 1
@@ -126,13 +147,15 @@ export default defineEventHandler(async (event) => {
     const phoneRaw = getFromColumns(r, PHONE_HEADERS) || null
     const phoneNorm = phoneRaw ? normalizePhone(phoneRaw) : null
 
-    // 🔴 Toggles from CSV:
-    // Foreman: Y => 1 else 0  |  Tracking: Y => time_clock_level=1 else 0
-    const foreman = parseYes(getFromColumns(r, FOREMAN_HEADERS)) ? 1 : 0
-    const time_clock_level = parseYes(getFromColumns(r, TRACKING_HEADERS)) ? 1 : 0
+    // Permissions derived from CSV
+    const time_for_others = parseYes(getFromColumns(r, FOREMAN_HEADERS)) ? 1 : 0
+    const tracking_info   = parseYes(getFromColumns(r, TRACKING_HEADERS)) ? 1 : 0
 
     // Always regular user for this importer
     const role = 'user'
+
+    // Include permissions both nested (for APIs that accept it) and also set after create
+    const permissionsObject = { time_for_others, tracking_info }
 
     const payload: any = {
       name,
@@ -142,8 +165,9 @@ export default defineEventHandler(async (event) => {
       role,                        // never admin here
       employee: 1,                 // marks as Employee (not Staff)
       active: 1,
-      foreman,                     // ← drives Foreman toggle
-      time_clock_level             // ← drives Tracking toggle
+
+      // Some installations support nested permissions right on create:
+      permissions: permissionsObject
     }
 
     if (phoneNorm) {
@@ -156,6 +180,13 @@ export default defineEventHandler(async (event) => {
     try {
       const res = await client.post('/api/users', payload)
       results.push({ ok: true, res })
+
+      // If the API ignored nested permissions, ensure they’re applied post-create.
+      const created = res?.data ?? res
+      const userId = Number(created?.id)
+      if (Number.isFinite(userId)) {
+        await setPermissions(userId, permissionsObject)
+      }
     } catch (err: any) {
       const status = err?.response?.status || 'Unknown'
       const msg =
