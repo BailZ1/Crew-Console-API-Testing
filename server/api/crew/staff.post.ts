@@ -24,7 +24,9 @@ const H = {
   PAYROLL: 'Payroll',
   JOBS: 'Jobs',
   USERS: 'Users',      // ignored for role; we always create regular staff
-  ANALYSIS: 'Analysis'
+  ANALYSIS: 'Analysis',
+  FOREMAN: 'Foreman',
+  TRACKING: 'Tracking'
 } as const
 
 // Case-insensitive, whitespace-tolerant lookup that returns the raw cell value
@@ -167,10 +169,76 @@ export default defineEventHandler(async (event) => {
     const employeeIdRaw = (getExact(r, H.EMP_ID) || '').trim() || null
     const phoneRaw = (getExact(r, H.PHONE) || '').trim() || null
 
-    const time_clock_level = parseYes(r[H.PAYROLL]) ? 1 : 0
-    const scheduler_level = parseYes(r[H.JOBS]) ? 1 : 0
-    const metrics_level   = parseYes(r[H.ANALYSIS]) ? 1 : 0
-    const metrics_enabled = metrics_level > 0 ? 1 : 0
+    // Flags from CSV columns
+    const payrollFlag  = parseYes(r[H.PAYROLL])
+    const jobsFlag     = parseYes(r[H.JOBS])
+    const usersFlag    = parseYes(r[H.USERS])
+    const analysisFlag = parseYes(r[H.ANALYSIS])
+    const foremanFlag  = parseYes(r[H.FOREMAN])
+    const trackingFlag = parseYes(r[H.TRACKING])
+
+    // Numeric levels for legacy fields
+    const time_clock_level = payrollFlag ? 1 : 0
+    const scheduler_level  = jobsFlag ? 1 : 0
+    const metrics_level    = analysisFlag ? 1 : 0
+    const metrics_enabled  = metrics_level > 0 ? 1 : 0
+
+    // Build permissions array for this user (for the Permissions model)
+    const permissions: any[] = []
+
+    // Time module
+    if (time_clock_level) {
+      permissions.push({
+        name: 'time',
+        pivot: { value: 'edit' }
+      })
+    }
+
+    // Foreman toggle -> time_for_others permission
+    if (foremanFlag) {
+      permissions.push({
+        name: 'time_for_others',
+        pivot: { value: 'edit' }
+      })
+    }
+
+    // Tracking toggle -> tracking_info permission
+    if (trackingFlag) {
+      permissions.push({
+        name: 'tracking_info',
+        pivot: { value: 'edit' }
+      })
+    }
+
+    // Other module permissions from CSV
+    if (payrollFlag) {
+      permissions.push({
+        name: 'payroll',
+        pivot: { value: 'edit' }
+      })
+    }
+
+    if (jobsFlag) {
+      permissions.push({
+        name: 'jobs',
+        pivot: { value: 'edit' }
+      })
+    }
+
+    if (usersFlag) {
+      permissions.push({
+        name: 'users',
+        pivot: { value: 'edit' }
+      })
+    }
+
+    // analysis permission is view-only
+    if (analysisFlag) {
+      permissions.push({
+        name: 'analysis',
+        pivot: { value: 'view' }
+      })
+    }
 
     // Always create regular staff (never admin)
     const role = 'user'
@@ -201,6 +269,11 @@ export default defineEventHandler(async (event) => {
       // Guardrails
       type: 'user',
       is_super_admin: 0
+    }
+
+    // Attach permissions only if any were set
+    if (permissions.length) {
+      payload.permissions = permissions
     }
 
     if (phoneRaw) {
