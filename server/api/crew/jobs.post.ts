@@ -105,21 +105,21 @@ export default defineEventHandler(async (event) => {
     }
     if (number) job.number = number
 
-    // address.street is required by the API → use CSV street, or "N/A" if missing
-    const streetFinal = street || 'N/A'
+    // 🔑 Address is entirely optional.
+    // If there is no street address, DO NOT push anything for address / address.street.
+    if (street) {
+      const address: any = { street }
 
-    const address: any = { street: streetFinal }
+      if (street_2) address.street_2 = street_2
+      if (city)     address.city     = city
+      if (state)    address.state    = state
+      if (zip)      address.zip      = zip
+      if (country)  address.country  = country
+      if (lat)      address.lat      = lat
+      if (lng)      address.lng      = lng
 
-    // Only add other address fields if present
-    if (street_2) address.street_2 = street_2
-    if (city)     address.city     = city
-    if (state)    address.state    = state
-    if (zip)      address.zip      = zip
-    if (country)  address.country  = country
-    if (lat)      address.lat      = lat
-    if (lng)      address.lng      = lng
-
-    job.address = address
+      job.address = address
+    }
 
     try {
       const response = await client.post('/api/jobs', job)
